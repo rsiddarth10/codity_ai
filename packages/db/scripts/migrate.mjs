@@ -25,6 +25,26 @@ if (!databaseUrl) {
 
 const [, , rawDirection = 'up', rawCount] = process.argv;
 
+/**
+ * We name migrations with zero-padded sequence prefixes (0001..0008) for readability
+ * instead of node-pg-migrate's default 13-digit epoch-ms prefixes. The library still
+ * orders them correctly (it falls back to `Number(prefix)` -> 1..8), but it emits a
+ * benign `Can't determine timestamp for NNNN` on stderr for each file. This logger
+ * proxies console and drops ONLY that known false-positive line; everything else
+ * (the SQL echo, "No migrations to run!", real errors) passes through untouched.
+ */
+const migrateLogger = {
+  info: console.info.bind(console),
+  warn: console.warn.bind(console),
+  debug: console.debug.bind(console),
+  error: (...args) => {
+    if (typeof args[0] === 'string' && args[0].startsWith("Can't determine timestamp")) {
+      return;
+    }
+    console.error(...args);
+  },
+};
+
 /** Shared options for every invocation. */
 function baseOptions(direction, count) {
   return {
@@ -38,6 +58,7 @@ function baseOptions(direction, count) {
     // Refuse to run if migrations are out of order relative to what's recorded.
     checkOrder: true,
     verbose: true,
+    logger: migrateLogger,
   };
 }
 
