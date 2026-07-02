@@ -71,6 +71,25 @@ node packages/db/scripts/migrate.mjs down 8
 npm run migrate:up
 ```
 
+## Run the tests
+
+The suite runs against **real Postgres** (the brief requires it — not mocks). Vitest's
+global setup auto-creates and migrates an isolated `codity_test` database, so you only need
+the Postgres container running.
+
+```bash
+npm run db:up        # Postgres must be up
+npm test             # vitest run
+```
+
+Phase 2 ships 13 tests including the grade-critical concurrency proofs:
+
+- `test/claim.concurrency.test.ts` — 500 jobs, 24 concurrent claimers → **each job claimed exactly once** (zero duplicates, none lost).
+- `test/concurrency-limit.test.ts` — the per-queue concurrency cap is never exceeded under 20 concurrent claimers.
+- `test/skip-locked.test.ts` — `FOR UPDATE SKIP LOCKED` skips a locked row instead of blocking.
+- `test/reaper.test.ts` — a job whose worker "died" mid-execution is requeued; a job with a fresh heartbeat is not.
+- `test/lifecycle.test.ts` — full state-machine trail, execution/audit rows, idempotency, batch enqueue.
+
 ## Teardown
 
 ```bash

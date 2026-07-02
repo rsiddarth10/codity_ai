@@ -146,3 +146,80 @@ and keep hard-delete + CASCADE for a clean, predictable schema here.
 - Workers are infrastructure, not tenant-scoped — any worker can be pointed at any queue.
   In a hostile multi-tenant deployment you'd scope workers to orgs; out of scope here.
 - `refresh_tokens` was added beyond the required table list to support real JWT refresh.
+
+---
+
+## 2. Atomic claiming & the data-access layer (Phase 2)
+
+Phase 2 built the domain data-access layer (`packages/core`) — no HTTP yet — and *proved*
+the concurrency guarantees with tests against real dockerized Postgres.
+
+### 2.1 The claim query ([packages/core/src/claim.ts](packages/core/src/claim.ts))
+
+Two safety properties, two mechanisms:
+
+**(1) No two workers ever claim the same job — `FOR UPDATE SKIP LOCKED`.**
+The `claimable` CTE selects candidate `queued` rows ordered by `priority DESC, run_at,
+created_at`, row-locks them, and **skips** any row another claim already holds. Locked rows
+are invisible rather than blocking, so N concurrent claimers carve the queue into disjoint
+sets with zero coordination and zero double-delivery. The whole thing is one statement: a
+CTE that `SELECT ... FOR UPDATE SKIP LOCKED LIMIT capacity`, wrapped by an `UPDATE ... SET
+status='claimed' ... RETURNING jobs.*`, so selection and state change commit atomically.
+
+**(2) The queue concurrency limit is never exceeded — per-queue advisory lock.**
+"Max running across ALL workers" needs an *exact* in-flight count at claim time, and a bare
+`count(*)` races with other claimers' commits. So `claimJobs` takes a **transaction-scoped
+advisory lock keyed by the queue id** (`pg_advisory_xact_lock(hashtextextended(queue_id))`)
+around the claim. Within that lock the count is exact and `capacity = limit − inflight`
+cannot overcommit. Crucially this serializes only the *claim critical section per queue* —
+claims are sub-millisecond row updates, different queues use different keys and run fully in
+parallel, and **execution is always concurrent**. Consistent lock-acquire order (advisory →
+job rows) means no deadlocks.
+
+Why an advisory lock rather than `SELECT ... FROM queues FOR UPDATE`? The advisory lock
+doesn't block readers/writers of the queue *config* row (pause/resume, stats) — it scopes
+contention to exactly the claim path.
+
+A paused queue (or a missing queue) resolves to `capacity = 0`, so it hands out nothing
+while in-flight jobs keep running.
+
+### 2.2 Lifecycle transitions ([lifecycle.ts](packages/core/src/lifecycle.ts))
+
+Every post-claim transition is an **atomic conditional UPDATE** — e.g. `... WHERE id=$1 AND
+status='running' AND claimed_by=$2`. If a job was reaped and reassigned, the original
+worker's late `completeJob`/`failJob` matches nothing and no-ops, so a zombie worker can
+never clobber newer state. Each transition writes a `job_executions` row (one per attempt)
+and a `job_state_transitions` audit row inside the same transaction.
+
+`attempts` increments on `claimed → running` (an "attempt" = one `job_executions` row).
+`failJob` is a plain failure record in this phase; the retry-vs-DLQ decision lands in Phase 5.
+
+### 2.3 Reaper / crash recovery ([lifecycle.ts](packages/core/src/lifecycle.ts) `requeueExpiredJobs`)
+
+Heartbeats extend `lock_expires_at`. If a worker crashes, heartbeats stop, the lock expires,
+and the reaper's `SELECT ... WHERE status IN ('claimed','running') AND lock_expires_at <
+now() FOR UPDATE SKIP LOCKED` finds the job, marks its orphaned execution `failed`, and
+returns it to `queued`. Lock-expiry is a single mechanism that covers both hard crashes and
+hung jobs, needing no separate "is the worker alive?" check. (`markStaleWorkersDead` still
+flips silent workers to `dead` for the dashboard.)
+
+### 2.4 What Phase 2 tested & proved (13 tests, real Postgres)
+
+| Test | Proves |
+| --- | --- |
+| `claim.concurrency` — 500 jobs, 24 claimers | Every job claimed **exactly once**: `set(claimed).size == 500`, DB shows 500 claimed/owned, **no** job with two `claimed` audit rows. |
+| `claim.concurrency` — priority ordering | `priority DESC` then FIFO within a priority. |
+| `concurrency-limit` — 60 jobs, limit 5, 20 claimers | In-flight **never exceeds 5**; exactly 5 claimed, 55 stay queued. |
+| `concurrency-limit` — slot free on completion | Completing a job frees the slot for the next. |
+| `concurrency-limit` — paused queue | Paused ⇒ 0 claims; resume ⇒ claimable. |
+| `skip-locked` | A row locked by another tx is **skipped, not waited on** (test would hang if it blocked). |
+| `lifecycle` (5) | Full `queued→claimed→running→completed` trail, execution rows, failure record, **idempotency key returns same job**, future `run_at ⇒ scheduled`, batch enqueue. |
+| `reaper` (2) | Dead worker's job **requeued** (attempt 2, orphaned exec failed, audited); fresh-heartbeat job **not** requeued. |
+
+Tests run against an isolated auto-provisioned `codity_test` database (Vitest global setup
+creates + migrates it), truncated between tests. Files run serially since they share the DB.
+
+**Trade-off recorded:** per-queue claim serialization is a deliberate choice for *exact*
+concurrency accounting. If a single queue ever needs a claim rate beyond what serialized
+sub-ms claims allow, the escape hatch is queue **sharding** (partition one logical queue
+into K sub-queues, each independently claimable) — noted for the scaling section.
