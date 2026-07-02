@@ -32,6 +32,24 @@ services:
     ports:
       - "8080:8080"
 
+  api:
+    build: .
+    container_name: codity-api
+    restart: unless-stopped
+    init: true
+    command: ["node", "--import", "tsx", "packages/api/src/main.ts"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-codity}:${POSTGRES_PASSWORD:-codity}@postgres:5432/${POSTGRES_DB:-codity}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      API_PORT: 4000
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-dev-access-secret-change-me}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev-refresh-secret-change-me}
+    ports:
+      - "${API_PORT:-4000}:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   worker:
     build: .
     restart: unless-stopped

@@ -13,6 +13,7 @@ COPY packages/shared/package.json ./packages/shared/package.json
 COPY packages/core/package.json ./packages/core/package.json
 COPY packages/worker/package.json ./packages/worker/package.json
 COPY packages/scheduler/package.json ./packages/scheduler/package.json
+COPY packages/api/package.json ./packages/api/package.json
 RUN npm ci
 
 # Copy the rest of the source.

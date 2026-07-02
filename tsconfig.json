@@ -5,6 +5,7 @@
     { "path": "./packages/core" },
     { "path": "./packages/shared" },
     { "path": "./packages/worker" },
-    { "path": "./packages/scheduler" }
+    { "path": "./packages/scheduler" },
+    { "path": "./packages/api" }
   ]
 }

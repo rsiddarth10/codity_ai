@@ -94,3 +94,48 @@ export interface JobExecutionRow {
   result: Record<string, unknown> | null;
   created_at: Date;
 }
+
+export interface ProjectRow {
+  id: string;
+  organization_id: string;
+  name: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface RetryPolicyRow {
+  id: string;
+  project_id: string;
+  name: string;
+  strategy: RetryStrategy;
+  max_attempts: number;
+  base_delay_ms: number;
+  max_delay_ms: number | null;
+  backoff_multiplier: string; // numeric arrives as string from pg
+  jitter: boolean;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface JobLogRow {
+  id: number;
+  job_id: string;
+  execution_id: string | null;
+  level: 'debug' | 'info' | 'warn' | 'error';
+  message: string;
+  metadata: Record<string, unknown> | null;
+  logged_at: Date;
+}
+
+export interface QueueStats {
+  queued: number;
+  scheduled: number;
+  running: number;
+  completed: number;
+  failed: number;
+  dead_letter: number;
+  cancelled: number;
+  total: number;
+  avg_duration_ms: number;
+  succeeded_executions: number;
+}

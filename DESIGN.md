@@ -291,3 +291,64 @@ slow queries don't cause false reaps, while a truly dead worker's jobs are recov
 **Windows dev note:** POSIX `SIGTERM` isn't delivered to console processes on Windows, so
 process-level signal draining is validated in the Linux container; the engine `stop()`
 logic is covered deterministically by the in-process drain test on all platforms.
+
+---
+
+## 4. REST API (Phase 4)
+
+Express app in `packages/api`, built as an injectable factory `buildApp(pool, config,
+logger)` (tests supply a test pool + secrets + silent logger). Read/write SQL lives in
+`@codity/core` (`queries.ts`); the API package owns HTTP concerns + auth.
+
+### 4.1 Why Express
+
+Chosen over Fastify for reviewer familiarity and a frictionless middleware model (auth,
+`pino-http`, centralized errors). We validate with `zod` and log with `pino` regardless of
+framework, and the HTTP layer isn't this system's bottleneck (Postgres is), so Fastify's
+throughput edge doesn't move the needle here. Express 4 + a tiny `asyncHandler` (forwards
+async rejections to the error middleware) avoids Express 5's newer path-to-regexp quirks.
+
+### 4.2 Auth & tenancy
+
+- **Access token**: short-lived JWT (`sub`/`org`/`role`), verified by `requireAuth`, which
+  populates `req.auth`. Everything mounted after it requires a valid token.
+- **Refresh token**: an opaque 256-bit random string; only its **SHA-256 hash** is stored
+  (`refresh_tokens`). `/auth/refresh` **rotates** — the presented token is revoked and a new
+  pair issued, so a stolen refresh token is single-use and detectable.
+- **Passwords**: `bcryptjs` (pure-JS, no native build). Login returns the same 401 whether
+  the email is unknown or the password is wrong (no user enumeration).
+- **Tenant isolation**: every handler runs `assertProject/Queue/Job(pool, id, orgId)`, which
+  resolve the resource's owning org via joins and throw **404 (not 403)** when it's outside
+  the caller's org — so we never confirm that an id exists in another tenant.
+
+### 4.3 API conventions
+
+- **Validation**: `zod` schemas on body/query/params via a `validate()` middleware; parsed
+  values land on `req.validated` (we don't reassign the Express `req.query` getter). Bad
+  input → `400 { error: { code:'BAD_REQUEST', message, details: <flattened zod issues> } }`.
+- **Errors**: one centralized handler → `{ error: { code, message, details?, requestId } }`.
+  It maps Postgres `23505/23503/23514` to `409/400/400` and treats anything else as an
+  opaque 500 (no internal leakage). Every response carries the request id.
+- **Pagination**: offset-based `?page&pageSize` (max 100), consistent envelope
+  `{ data, pagination: { page, pageSize, total, totalPages } }` on all list endpoints.
+- **Logging**: `pino-http` logs method/path/status/latency/reqId; assigns/echoes
+  `x-request-id`; redacts `authorization`/`cookie`.
+- **Docs**: hand-written OpenAPI 3.0 at `/openapi.json`, Swagger UI at `/docs`.
+
+### 4.4 Resource tree
+
+`/auth/{signup,login,refresh,logout}` · `/me` · `/projects` (CRUD) ·
+`/projects/:id/retry-policies` · `/projects/:id/queues` (create/list) ·
+`/queues/:id` (get/patch/delete, `/pause`, `/resume`, `/stats`) ·
+`/queues/:id/jobs` (enqueue/list+filter) · `/jobs/:id` (+ `/executions`, `/logs`,
+`/transitions`, `/cancel`) · `/workers`. Job enqueue supports immediate + delayed (future
+`runAt` → `scheduled`) and idempotency keys (returns the existing job with 200). Cron/batch
+endpoints land in Phase 6; retry-from-DLQ + manual retry in Phase 5.
+
+### 4.5 What Phase 4 tested & proved (17 API tests + live curl)
+
+Signup/login/refresh-rotation/401s; project CRUD + duplicate→409; **cross-org access→404**;
+queue create/pause/resume/stats; job enqueue/get/list-filter-paginate/**idempotency-200**/
+cancel→then-409; validation→400; OpenAPI + health. Integration tests run against the real
+`codity_test` DB via supertest. Live-verified end-to-end against the running process
+(`/docs` serves Swagger UI, full signup→enqueue→stats flow over HTTP).

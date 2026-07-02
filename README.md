@@ -19,7 +19,7 @@ packages/
   core/        # data-access layer: enqueue, the claim query, lifecycle, reaper
   worker/      # worker engine: poll/claim/execute/heartbeat/graceful shutdown
   scheduler/   # reaper sweep loop (cron promoter added in Phase 6)
-  api/         # Express REST API                            (Phase 4)
+  api/         # Express REST API: auth, projects, queues, jobs, OpenAPI
 frontend/      # React dashboard                             (Phase 7)
 docs/          # architecture + ER diagrams
 scripts/       # demo-seed.ts and other dev utilities
@@ -46,6 +46,30 @@ The worker polls all non-paused queues (priority-ordered) unless `WORKER_QUEUES`
 runs up to `WORKER_CONCURRENCY` jobs at once, heartbeats to hold its job locks, and drains
 in-flight jobs on `docker stop` / SIGTERM. The scheduler runs the reaper that requeues jobs
 from crashed workers.
+
+## Run the API
+
+```bash
+npm run migrate:up
+npm start -w @codity/api          # or: docker compose up -d --build api
+# API on http://localhost:4000 — Swagger UI at http://localhost:4000/docs
+```
+
+Quick end-to-end via HTTP:
+
+```bash
+# Sign up (returns accessToken + refreshToken)
+curl -sX POST localhost:4000/api/v1/auth/signup -H 'Content-Type: application/json' \
+  -d '{"email":"me@ex.com","password":"password123","organizationName":"Acme"}'
+
+# Use the token for everything else:
+TOKEN=...        # accessToken from the response
+curl -sX POST localhost:4000/api/v1/projects -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"name":"my-project"}'
+```
+
+All `/api/v1` routes except `/auth/*` require `Authorization: Bearer <accessToken>`, and
+resources are isolated per organization. Full endpoint reference is at `/docs`.
 
 ## Prerequisites
 
