@@ -15,13 +15,37 @@ history, logs, lifecycle audit).
 ```
 packages/
   db/          # pg connection pool + node-pg-migrate migrations (the schema)
-  shared/      # config, logger, errors, shared types        (later phases)
+  shared/      # env config (zod), pino logger, graceful shutdown
+  core/        # data-access layer: enqueue, the claim query, lifecycle, reaper
+  worker/      # worker engine: poll/claim/execute/heartbeat/graceful shutdown
+  scheduler/   # reaper sweep loop (cron promoter added in Phase 6)
   api/         # Express REST API                            (Phase 4)
-  worker/      # polling / claiming / execution              (Phase 3)
-  scheduler/   # cron promotion + reaper                     (Phase 3/6)
 frontend/      # React dashboard                             (Phase 7)
 docs/          # architecture + ER diagrams
+scripts/       # demo-seed.ts and other dev utilities
 ```
+
+## Run the worker & scheduler
+
+```bash
+npm run migrate:up                       # ensure schema exists
+
+# Option A — via Docker (whole stack):
+docker compose up -d --build worker scheduler
+docker compose up -d --scale worker=3 worker   # scale workers horizontally
+
+# Option B — locally (each in its own terminal):
+npm start -w @codity/worker
+npm start -w @codity/scheduler
+
+# Enqueue some demo work and watch it get processed:
+COUNT=20 npx tsx scripts/demo-seed.ts
+```
+
+The worker polls all non-paused queues (priority-ordered) unless `WORKER_QUEUES` is set,
+runs up to `WORKER_CONCURRENCY` jobs at once, heartbeats to hold its job locks, and drains
+in-flight jobs on `docker stop` / SIGTERM. The scheduler runs the reaper that requeues jobs
+from crashed workers.
 
 ## Prerequisites
 

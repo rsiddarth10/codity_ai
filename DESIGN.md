@@ -223,3 +223,71 @@ creates + migrates it), truncated between tests. Files run serially since they s
 concurrency accounting. If a single queue ever needs a claim rate beyond what serialized
 sub-ms claims allow, the escape hatch is queue **sharding** (partition one logical queue
 into K sub-queues, each independently claimable) — noted for the scaling section.
+
+---
+
+## 3. Worker & scheduler services (Phase 3)
+
+Two new independently-scalable process types, built on the Phase 2 data-access layer.
+Shared cross-cutting code (env parsing via zod, pino logger, signal handling) lives in
+`@codity/shared`. Both processes split into an injectable **engine/class** (transport-free,
+integration-tested in-process) and a thin **`main.ts`** entrypoint (env → wire → run).
+
+### 3.1 Worker engine ([packages/worker/src/engine.ts](packages/worker/src/engine.ts))
+
+- **Polling with jitter.** Each cycle is scheduled at `pollInterval ± jitter`
+  (`scheduleNextPoll`) to avoid a thundering herd of synchronized workers.
+- **In-process semaphore = the in-flight map.** `availableSlots = concurrency −
+  inFlight.size`; a poll claims at most that many, so the worker never overcommits its own
+  capacity. Jobs run **concurrently** (each `execute()` is a tracked promise), not
+  one-at-a-time.
+- **Multi-queue, priority-ordered.** With no explicit `WORKER_QUEUES`, the worker discovers
+  all non-paused queues ordered by `priority DESC` each cycle and fills slots from the
+  top — so higher-priority queues are served first, and newly created queues are picked up
+  automatically.
+- **Heartbeats.** Every `heartbeatInterval` the worker updates `workers.last_heartbeat`
+  (+ a `worker_heartbeats` history row) and **extends the lock on every in-flight job**, so
+  the reaper leaves live work alone.
+- **Handler registry.** Jobs dispatch by `payload.type` to a registered `JobHandler`
+  (`echo`/`sleep`/`fail` built in). Handlers get a `log()` (→ `job_logs`) and an
+  `AbortSignal` for cooperative cancellation. Unknown types fail loudly.
+
+### 3.2 Graceful shutdown ([engine.ts](packages/worker/src/engine.ts) `stop()`)
+
+On SIGTERM/SIGINT: stop scheduling polls, mark the worker `draining`, then `drain()` —
+`Promise.allSettled` on in-flight jobs raced against `shutdownTimeoutMs`. If everything
+finishes → outcome `drained`, nothing left in `claimed`/`running`. If the timeout wins →
+fire the `AbortSignal` and leave the stragglers for the reaper (lock expiry). Either way,
+**no job is lost and none is stuck** on a normal restart.
+
+**Container signal correctness:** the Docker command runs `node --import tsx …` (not `npm
+start`) with `init: true`, so **node** is the signal target under tini and receives the
+SIGTERM `docker stop` sends. Proven end-to-end: with 5 jobs in flight, `docker stop worker`
+drained all 5 to `completed`, left the unclaimed job `queued`, and exited in ~1.5s.
+
+### 3.3 Scheduler / reaper ([packages/scheduler/src/reaper.ts](packages/scheduler/src/reaper.ts))
+
+A **singleton** sweep loop (in the scheduler, not the scaled workers). Each non-overlapping
+tick: `markStaleWorkersDead` (dashboard signal) + `requeueExpiredJobs`. Because requeue uses
+`FOR UPDATE SKIP LOCKED`, it's still safe if two reapers briefly overlap during a deploy.
+(Phase 6 adds the cron promoter to this same process.)
+
+**Timeout choice.** `JOB_LOCK_DURATION_MS` = 30s and `WORKER_HEARTBEAT_INTERVAL_MS` = 5s:
+a healthy worker refreshes each lock 6× before it would expire, so transient GC pauses or
+slow queries don't cause false reaps, while a truly dead worker's jobs are recovered within
+~30–35s. `WORKER_DEAD_AFTER_MS` = 30s mirrors this for worker liveness. All are env-tunable.
+
+### 3.4 What Phase 3 tested & proved (6 tests + live run)
+
+| Test | Proves |
+| --- | --- |
+| worker — processes all jobs | 30 jobs → all `completed`, one succeeded execution row each. |
+| worker — semaphore | With `concurrency=3`, observed simultaneous executions never exceed 3. |
+| worker — failure | Failing handler → job `failed`, `last_error` recorded. |
+| worker — graceful drain | 4 in-flight jobs on `stop()` → `drained`, all completed, **0 left in-flight**. |
+| scheduler-reaper (2) | Crashed-worker job requeued via the loop; stale worker marked `dead`. |
+| **Live run** | Containerized worker over the compose network processed 12 jobs; `docker stop` drained 5 in-flight jobs (SIGTERM → clean exit). |
+
+**Windows dev note:** POSIX `SIGTERM` isn't delivered to console processes on Windows, so
+process-level signal draining is validated in the Linux container; the engine `stop()`
+logic is covered deterministically by the in-process drain test on all platforms.

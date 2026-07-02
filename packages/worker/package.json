@@ -1,0 +1,21 @@
+{
+  "name": "@codity/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./engine": "./src/engine.ts",
+    "./handlers": "./src/handlers.ts"
+  },
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "dev": "tsx watch src/main.ts"
+  },
+  "dependencies": {
+    "@codity/core": "*",
+    "@codity/db": "*",
+    "@codity/shared": "*"
+  }
+}

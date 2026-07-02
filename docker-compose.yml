@@ -1,5 +1,8 @@
-# Phase 1 brings up Postgres (+ Adminer for inspection).
-# API / worker / scheduler / frontend services are added in later phases.
+# Postgres (+ Adminer), plus the worker and scheduler services.
+# API and frontend services are added in later phases.
+#
+# Run migrations once before starting workers:  npm run migrate:up
+# Scale workers horizontally:  docker compose up -d --scale worker=3
 services:
   postgres:
     image: postgres:16-alpine
@@ -28,6 +31,37 @@ services:
         condition: service_healthy
     ports:
       - "8080:8080"
+
+  worker:
+    build: .
+    restart: unless-stopped
+    # node is the direct process (PID 1 under tini) so SIGTERM from `docker stop` reaches
+    # our shutdown handler and in-flight jobs drain. `init: true` runs tini to forward it.
+    init: true
+    command: ["node", "--import", "tsx", "packages/worker/src/main.ts"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-codity}:${POSTGRES_PASSWORD:-codity}@postgres:5432/${POSTGRES_DB:-codity}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
+      # WORKER_QUEUES unset => discover and poll all queues.
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Graceful shutdown: give in-flight jobs time to drain on `docker stop`.
+    stop_grace_period: 30s
+
+  scheduler:
+    build: .
+    container_name: codity-scheduler
+    restart: unless-stopped
+    init: true
+    command: ["node", "--import", "tsx", "packages/scheduler/src/main.ts"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-codity}:${POSTGRES_PASSWORD:-codity}@postgres:5432/${POSTGRES_DB:-codity}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   pgdata:

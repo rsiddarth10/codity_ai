@@ -137,6 +137,14 @@ export async function setWorkerStatus(
   await db.query(`UPDATE workers SET status = $2 WHERE id = $1`, [workerId, status]);
 }
 
+/** Ids of all non-paused queues, highest priority first (worker queue discovery). */
+export async function listQueueIdsByPriority(db: Queryable): Promise<string[]> {
+  const { rows } = await db.query<{ id: string }>(
+    `SELECT id FROM queues WHERE is_paused = false ORDER BY priority DESC, created_at ASC`,
+  );
+  return rows.map((r) => r.id);
+}
+
 /** Mark workers dead if they have not heartbeat within `deadAfterMs` (reaper support). */
 export async function markStaleWorkersDead(
   db: Pool,

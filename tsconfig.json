@@ -2,6 +2,9 @@
   "files": [],
   "references": [
     { "path": "./packages/db" },
-    { "path": "./packages/core" }
+    { "path": "./packages/core" },
+    { "path": "./packages/shared" },
+    { "path": "./packages/worker" },
+    { "path": "./packages/scheduler" }
   ]
 }

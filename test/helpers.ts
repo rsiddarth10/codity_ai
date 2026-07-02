@@ -37,6 +37,19 @@ export async function resetDb(pool: Pool): Promise<void> {
   await pool.query(`TRUNCATE ${ALL_TABLES.join(', ')} RESTART IDENTITY CASCADE`);
 }
 
+/** Poll `predicate` until it returns true or the timeout elapses. */
+export async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  { timeoutMs = 10_000, intervalMs = 20 }: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await predicate()) return;
+    if (Date.now() > deadline) throw new Error(`waitFor timed out after ${timeoutMs}ms`);
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
 /** Create org -> project -> queue in one call and return the queue (+ project id). */
 export async function seedQueue(
   pool: Pool,
