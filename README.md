@@ -22,6 +22,20 @@ Full-resolution + ER diagram: [docs/architecture.md](./docs/architecture.md) ·
 [docs/er-diagram.md](./docs/er-diagram.md) · downloadable SVG/PNG in
 [deliverables/](./deliverables).
 
+## Dashboard
+
+The React dashboard runs locally at **http://localhost:5173** (`docker compose up -d --build`,
+or `npm run dev -w @codity/frontend`). It polls every ~3s for live updates.
+
+| Queue health & throughput | Job lifecycle, attempts & logs |
+| --- | --- |
+| ![Queue detail](./deliverables/screenshots/04-queue-detail.png) | ![Job detail](./deliverables/screenshots/06-job-detail.png) |
+| **Job explorer** (filter + paginate) | **Dead Letter Queue** (one-click retry) |
+| ![Jobs](./deliverables/screenshots/05-jobs.png) | ![Dead letter queue](./deliverables/screenshots/08-dead-letter.png) |
+
+More screens (queues list, workers, projects, login) in
+[deliverables/screenshots/](./deliverables/screenshots).
+
 ## Repository layout
 
 ```

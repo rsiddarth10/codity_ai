@@ -9,6 +9,12 @@ const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, 
 
 const arch = b64('deliverables/architecture.png');
 const er = b64('deliverables/er-diagram.png');
+const shots = {
+  queue: b64('deliverables/screenshots/04-queue-detail.png'),
+  job: b64('deliverables/screenshots/06-job-detail.png'),
+  jobs: b64('deliverables/screenshots/05-jobs.png'),
+  dlq: b64('deliverables/screenshots/08-dead-letter.png'),
+};
 
 // The most important source files, embedded verbatim (accurate — read from disk).
 const codeFiles = [
@@ -48,6 +54,8 @@ const html = `<!doctype html>
   .crit b { color: #1b2a4a; }
   .pill { display: inline-block; background: #eef2f9; border: 1px solid #cbd5e1; border-radius: 999px; padding: 1px 9px; font-size: 8.5pt; margin-right: 5px; }
   img.diagram { width: 100%; border: 1px solid #e2e8f0; border-radius: 6px; margin: 6px 0; }
+  img.shot { width: 100%; border: 1px solid #cbd5e1; border-radius: 6px; margin: 3px 0 2px; }
+  .cap { color: #475569; font-size: 9pt; margin: 0 0 12px; }
   pre { background: #0f1420; color: #e6e9ef; border-radius: 6px; padding: 10px 12px; overflow: hidden;
         white-space: pre-wrap; word-break: break-word; font: 7.4pt/1.35 "Consolas","Courier New",monospace; margin: 4px 0 14px; }
   code { font-family: inherit; }
@@ -108,6 +116,18 @@ API + worker pool + scheduler + Postgres + a React dashboard.</p>
 
 <h2>ER diagram (full schema)</h2>
 <img class="diagram" src="data:image/png;base64,${er}" alt="ER diagram" />
+
+<div class="page-break"></div>
+<h2>Dashboard (React + Vite + Recharts)</h2>
+<p>Runs locally at <code>http://localhost:5173</code> (<code>docker compose up -d --build</code>); polls every ~3s for live updates. Screens below use live demo data.</p>
+<img class="shot" src="data:image/png;base64,${shots.queue}" />
+<p class="cap">Queue detail — health stat cards, throughput chart, config editor (priority / concurrency / pause), and cron schedules.</p>
+<img class="shot" src="data:image/png;base64,${shots.job}" />
+<p class="cap">Job detail — full lifecycle timeline, per-attempt history (worker, duration), and structured logs.</p>
+<img class="shot" src="data:image/png;base64,${shots.jobs}" />
+<p class="cap">Job explorer — filter by status, paginated.</p>
+<img class="shot" src="data:image/png;base64,${shots.dlq}" />
+<p class="cap">Dead Letter Queue — failed jobs with reason / attempts and one-click retry.</p>
 
 <div class="page-break"></div>
 <h2>Design decisions &amp; major trade-offs</h2>
