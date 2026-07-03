@@ -62,7 +62,6 @@ const html = `<!doctype html>
 
 <div class="links">
   <div class="row"><span class="label">GitHub Repository</span> <a href="https://github.com/rsiddarth10/codity_ai">https://github.com/rsiddarth10/codity_ai</a></div>
-  <div class="row"><span class="label">Deployed Application</span> <span class="blank">&nbsp;</span></div>
 </div>
 
 <h2>Overview</h2>
