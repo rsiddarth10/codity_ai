@@ -9,6 +9,7 @@ import {
   updateQueue,
   deleteQueue,
   getQueueStats,
+  getQueueThroughput,
 } from '@codity/core';
 import { asyncHandler } from '../http.js';
 import { validate, body, params } from '../validate.js';
@@ -119,6 +120,19 @@ export function queueRoutes(pool: Pool): Router {
       const { queueId } = params<typeof queueIdParam>(req);
       await assertQueue(pool, queueId, organizationId);
       res.json(await getQueueStats(pool, queueId));
+    }),
+  );
+
+  const throughputQuery = z.object({ minutes: z.coerce.number().int().min(1).max(1440).default(60) });
+  r.get(
+    '/queues/:queueId/throughput',
+    validate({ params: queueIdParam, query: throughputQuery }),
+    asyncHandler(async (req, res) => {
+      const { organizationId } = authOf(req);
+      const { queueId } = params<typeof queueIdParam>(req);
+      await assertQueue(pool, queueId, organizationId);
+      const { minutes } = req.validated.query as { minutes: number };
+      res.json({ data: await getQueueThroughput(pool, queueId, minutes) });
     }),
   );
 

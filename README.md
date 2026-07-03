@@ -20,7 +20,7 @@ packages/
   worker/      # worker engine: poll/claim/execute/heartbeat/graceful shutdown
   scheduler/   # singleton sweep loop: reaper + retry/delayed/cron promotion
   api/         # Express REST API: auth, projects, queues, jobs, OpenAPI
-frontend/      # React dashboard                             (Phase 7)
+frontend/      # React + Vite + Recharts dashboard (auth, queues, jobs, workers, DLQ)
 docs/          # architecture + ER diagrams
 scripts/       # demo-seed.ts and other dev utilities
 ```
@@ -70,6 +70,24 @@ curl -sX POST localhost:4000/api/v1/projects -H "Authorization: Bearer $TOKEN" \
 
 All `/api/v1` routes except `/auth/*` require `Authorization: Bearer <accessToken>`, and
 resources are isolated per organization. Full endpoint reference is at `/docs`.
+
+## Run the dashboard
+
+```bash
+npm start -w @codity/api                 # API must be running (CORS is enabled)
+npm run dev -w @codity/frontend          # Vite dev server on http://localhost:5173
+# or the whole stack in Docker:
+docker compose up -d --build             # dashboard at http://localhost:5173
+```
+
+Sign up in the UI, create a project → queue, enqueue jobs, and start a worker
+(`npm start -w @codity/worker`) to watch them flow through in real time. The dashboard
+polls every ~3s and provides: queue health at a glance, a job explorer (filter by status,
+paginated), a job detail view (lifecycle timeline, per-attempt history, logs), worker fleet
+status, the Dead Letter Queue with one-click retry, queue config (priority / concurrency /
+pause-resume), cron schedule management, and a live throughput chart.
+
+The browser calls the API directly at `VITE_API_URL` (default `http://localhost:4000`).
 
 ## Prerequisites
 

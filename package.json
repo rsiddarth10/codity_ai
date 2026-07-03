@@ -5,7 +5,8 @@
   "description": "Distributed job scheduling platform (Postgres-backed).",
   "type": "module",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "frontend"
   ],
   "engines": {
     "node": ">=20"

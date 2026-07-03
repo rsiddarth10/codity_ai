@@ -81,5 +81,20 @@ services:
       postgres:
         condition: service_healthy
 
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        # Baked into the bundle at build time. The browser (on the host) reaches the API
+        # via its published port, so localhost:4000 works for the default setup.
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:4000}
+    container_name: codity-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      - api
+
 volumes:
   pgdata:

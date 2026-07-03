@@ -468,3 +468,33 @@ Pure cron next-run + validation; delayed one-shot promotion; **cron fire + link 
 next_run_at advance + no double-fire**; the **running SchedulerLoop** firing a due schedule
 into exactly one job; batch rollup (pending → done); and over HTTP: schedule create/list +
 **bad-cron 400**, batch submit + rollup.
+
+---
+
+## 7. Dashboard (Phase 7)
+
+React + TypeScript + Vite + Recharts SPA in `frontend/`, data via **TanStack Query** with a
+~3s `refetchInterval` (polling, per the brief). State is deliberately light — the server is
+the source of truth and queries re-poll.
+
+- **Auth**: JWT stored in `localStorage`; `authedFetch` transparently **refreshes on 401**
+  (one-shot) using the rotating refresh token, then retries; on failure it logs out. Tokens
+  live in a `ref` so the retry never reads a stale closure.
+- **Screens** (all required ones): Projects; Queues with **health at a glance** (queued /
+  running / completed / failed / DLQ badges, live); Queue detail with **stat cards + a
+  throughput area chart** (completed vs failed per minute), **config editor** (priority /
+  concurrency / pause-resume) and **cron schedule** management; **Job explorer** (filter by
+  status, paginated); **Job detail** with the **lifecycle timeline**, **per-attempt history**,
+  and **logs**, plus **retry / cancel** actions; **Worker fleet** (status, in-flight, last
+  heartbeat); **Dead Letter Queue** with one-click retry.
+- **Charts**: the throughput endpoint (`GET /queues/:id/throughput`) returns a
+  `generate_series`-filled per-minute series so the chart is continuous; success rate and
+  avg duration come from queue stats.
+- **API base URL**: the browser calls the API directly (`VITE_API_URL`, default
+  `localhost:4000`); server CORS is enabled. Served in prod by **nginx** with an SPA
+  fallback (multi-stage Docker build).
+
+**Verification**: strict `tsc --noEmit` clean, `vite build` succeeds, the built bundle
+serves (200, correct title), and every endpoint the UI calls is covered by the API
+integration tests. The new throughput SQL has its own integration test (**54 tests total**).
+Deep visual/interaction QA in a real browser is the one thing not automated here.

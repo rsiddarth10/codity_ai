@@ -188,6 +188,48 @@ export async function getQueueStats(db: Queryable, queueId: string): Promise<Que
   return { ...counts.rows[0]!, ...exec.rows[0]! };
 }
 
+export interface ThroughputBucket {
+  bucket: Date;
+  completed: number;
+  failed: number;
+  dead_lettered: number;
+}
+
+/**
+ * Per-minute time series for the dashboard charts (jobs/min, success rate, DLQ size over
+ * time). `generate_series` fills empty buckets so the chart is continuous; correlated
+ * subqueries (rather than joins) avoid row-multiplication when combining execution and DLQ
+ * counts. `minutes` is bounded by the caller.
+ */
+export async function getQueueThroughput(
+  db: Queryable,
+  queueId: string,
+  minutes: number,
+): Promise<ThroughputBucket[]> {
+  const { rows } = await db.query<ThroughputBucket>(
+    `WITH buckets AS (
+        SELECT generate_series(
+          date_trunc('minute', now()) - (($2::int - 1) * interval '1 minute'),
+          date_trunc('minute', now()),
+          interval '1 minute'
+        ) AS bucket
+     )
+     SELECT b.bucket,
+       (SELECT count(*)::int FROM job_executions je JOIN jobs j ON j.id = je.job_id
+         WHERE j.queue_id = $1 AND je.status = 'succeeded'
+           AND date_trunc('minute', je.finished_at) = b.bucket) AS completed,
+       (SELECT count(*)::int FROM job_executions je JOIN jobs j ON j.id = je.job_id
+         WHERE j.queue_id = $1 AND je.status = 'failed'
+           AND date_trunc('minute', je.finished_at) = b.bucket) AS failed,
+       (SELECT count(*)::int FROM dead_letter_queue d
+         WHERE d.queue_id = $1 AND date_trunc('minute', d.moved_at) = b.bucket) AS dead_lettered
+     FROM buckets b
+     ORDER BY b.bucket`,
+    [queueId, minutes],
+  );
+  return rows;
+}
+
 // ── Jobs ──────────────────────────────────────────────────────────────────────
 
 export interface JobFilter extends Page {
