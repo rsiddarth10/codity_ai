@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from '@codity/db';
 import { withTransaction, logTransition } from './tx.js';
+import { computeBackoffMs } from './retry.js';
 import type { JobRow } from './types.js';
 
 /**
@@ -107,24 +108,48 @@ export async function completeJob(
   });
 }
 
+/** Insert a Dead Letter Queue row for a job (idempotent on job_id). */
+async function insertDeadLetter(
+  client: PoolClient,
+  job: Pick<JobRow, 'id' | 'queue_id' | 'attempts' | 'payload'>,
+  reason: string,
+  lastError: string | null,
+): Promise<void> {
+  await client.query(
+    `INSERT INTO dead_letter_queue (job_id, queue_id, reason, attempts_made, last_error, payload)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (job_id) DO NOTHING`,
+    [job.id, job.queue_id, reason, job.attempts, lastError, job.payload],
+  );
+}
+
+export interface FailOutcome {
+  job: JobRow;
+  outcome: 'retry_scheduled' | 'dead_lettered';
+  /** Backoff delay applied before the retry (only when outcome is retry_scheduled). */
+  retryDelayMs?: number;
+}
+
 /**
- * running -> failed (Phase 2: terminal failure record only; Phase 5 adds retry/DLQ).
- * Returns null if the job is no longer running under this worker.
+ * running -> failed. Applies the job's SNAPSHOTTED retry policy:
+ *   - attempts remaining  -> status 'failed' with run_at pushed out by the computed
+ *     backoff (a resting "in-backoff" state; the scheduler's promoter later flips it back
+ *     to 'queued' when run_at elapses).
+ *   - attempts exhausted  -> status 'dead_letter' + a dead_letter_queue row.
+ * Returns null if the job is no longer running under this worker (e.g. it was reaped).
  */
 export async function failJob(
   pool: Pool,
   jobId: string,
   workerId: string,
   error: Error | string,
-): Promise<JobRow | null> {
+  rng: () => number = Math.random,
+): Promise<FailOutcome | null> {
   const message = error instanceof Error ? error.message : error;
   return withTransaction(pool, async (client) => {
+    // Guarded claim of the transition; also locks the row for the rest of the tx.
     const { rows } = await client.query<JobRow>(
-      `UPDATE jobs
-          SET status = 'failed',
-              last_error = $3,
-              lock_expires_at = NULL,
-              updated_at = now()
+      `UPDATE jobs SET last_error = $3, updated_at = now()
         WHERE id = $1 AND status = 'running' AND claimed_by = $2
         RETURNING *`,
       [jobId, workerId, message],
@@ -132,9 +157,77 @@ export async function failJob(
     const job = rows[0];
     if (!job) return null;
     await finishLatestExecution(client, jobId, 'failed', { error });
-    await logTransition(client, jobId, 'running', 'failed', workerId, message);
-    return job;
+
+    if (job.attempts < job.max_attempts) {
+      const delay = computeBackoffMs(job.retry_config, job.attempts, rng);
+      const updated = await client.query<JobRow>(
+        `UPDATE jobs
+            SET status = 'failed',
+                claimed_by = NULL, claimed_at = NULL, started_at = NULL, lock_expires_at = NULL,
+                run_at = now() + ($2::numeric * interval '1 millisecond'),
+                updated_at = now()
+          WHERE id = $1
+          RETURNING *`,
+        [jobId, delay],
+      );
+      await logTransition(
+        client,
+        jobId,
+        'running',
+        'failed',
+        workerId,
+        `attempt ${job.attempts}/${job.max_attempts} failed; retry in ${delay}ms`,
+      );
+      return { job: updated.rows[0]!, outcome: 'retry_scheduled', retryDelayMs: delay };
+    }
+
+    // Attempts exhausted -> Dead Letter Queue.
+    const updated = await client.query<JobRow>(
+      `UPDATE jobs
+          SET status = 'dead_letter',
+              claimed_by = NULL, claimed_at = NULL, started_at = NULL, lock_expires_at = NULL,
+              updated_at = now()
+        WHERE id = $1
+        RETURNING *`,
+      [jobId],
+    );
+    await insertDeadLetter(client, job, 'max attempts exhausted', message);
+    await logTransition(
+      client,
+      jobId,
+      'running',
+      'dead_letter',
+      workerId,
+      `attempt ${job.attempts}/${job.max_attempts} failed; moved to DLQ`,
+    );
+    return { job: updated.rows[0]!, outcome: 'dead_lettered' };
   });
+}
+
+/**
+ * Promote jobs whose retry backoff has elapsed: status 'failed' with run_at<=now() ->
+ * 'queued'. Runs in the scheduler. Returns the promoted job ids.
+ */
+export async function promoteRetriableJobs(pool: Pool, limit = 100): Promise<string[]> {
+  const { rows } = await pool.query<{ job_id: string }>(
+    `WITH due AS (
+        SELECT id FROM jobs
+         WHERE status = 'failed' AND run_at <= now()
+         ORDER BY run_at ASC
+         LIMIT $1
+         FOR UPDATE SKIP LOCKED
+     ),
+     promoted AS (
+        UPDATE jobs SET status = 'queued', updated_at = now()
+         WHERE id IN (SELECT id FROM due)
+         RETURNING id
+     )
+     INSERT INTO job_state_transitions (job_id, from_status, to_status, reason)
+     SELECT id, 'failed', 'queued', 'retry backoff elapsed' FROM promoted
+     RETURNING job_id`,
+    [limit],
+  );
+  return rows.map((r) => r.job_id);
 }
 
 /**
@@ -163,20 +256,23 @@ export async function heartbeatJobs(
 
 export interface ReapResult {
   requeuedJobIds: string[];
+  deadLetteredJobIds: string[];
 }
 
 /**
  * REAPER: recover jobs from crashed/hung workers. Finds claimed/running jobs whose lock
  * has expired (heartbeats stopped extending it), fails their orphaned execution row, and
- * returns them to 'queued' for another worker to pick up. Idempotent and safe to run
+ * either returns them to 'queued' for immediate re-pickup (crash = infra fault, no backoff
+ * penalty) or, if attempts are exhausted, moves them to the Dead Letter Queue — so a
+ * "poison" job that keeps crashing workers can't loop forever. Idempotent and safe to run
  * concurrently (FOR UPDATE SKIP LOCKED on the candidate scan).
- *
- * Phase 2 always requeues; Phase 5 will dead-letter when attempts are exhausted.
  */
 export async function requeueExpiredJobs(pool: Pool, limit = 100): Promise<ReapResult> {
   return withTransaction(pool, async (client) => {
-    const candidates = await client.query<{ id: string; status: string }>(
-      `SELECT id, status
+    const candidates = await client.query<
+      Pick<JobRow, 'id' | 'status' | 'attempts' | 'max_attempts' | 'queue_id' | 'payload' | 'last_error'>
+    >(
+      `SELECT id, status, attempts, max_attempts, queue_id, payload, last_error
          FROM jobs
         WHERE status IN ('claimed', 'running')
           AND lock_expires_at IS NOT NULL
@@ -188,6 +284,7 @@ export async function requeueExpiredJobs(pool: Pool, limit = 100): Promise<ReapR
     );
 
     const requeuedJobIds: string[] = [];
+    const deadLetteredJobIds: string[] = [];
     for (const row of candidates.rows) {
       // Close out the abandoned attempt (only matters if it had reached 'running').
       if (row.status === 'running') {
@@ -195,22 +292,39 @@ export async function requeueExpiredJobs(pool: Pool, limit = 100): Promise<ReapR
           error: 'worker lost: lock expired before completion',
         });
       }
-      await client.query(
-        `UPDATE jobs
-            SET status = 'queued',
-                claimed_by = NULL,
-                claimed_at = NULL,
-                started_at = NULL,
-                lock_expires_at = NULL,
-                run_at = now(),
-                last_error = 'reaped: worker lock expired',
-                updated_at = now()
-          WHERE id = $1`,
-        [row.id],
-      );
-      await logTransition(client, row.id, row.status, 'queued', null, 'reaped: lock expired');
-      requeuedJobIds.push(row.id);
+
+      if (row.attempts < row.max_attempts) {
+        await client.query(
+          `UPDATE jobs
+              SET status = 'queued',
+                  claimed_by = NULL, claimed_at = NULL, started_at = NULL, lock_expires_at = NULL,
+                  run_at = now(),
+                  last_error = 'reaped: worker lock expired',
+                  updated_at = now()
+            WHERE id = $1`,
+          [row.id],
+        );
+        await logTransition(client, row.id, row.status, 'queued', null, 'reaped: lock expired');
+        requeuedJobIds.push(row.id);
+      } else {
+        await client.query(
+          `UPDATE jobs
+              SET status = 'dead_letter',
+                  claimed_by = NULL, claimed_at = NULL, started_at = NULL, lock_expires_at = NULL,
+                  updated_at = now()
+            WHERE id = $1`,
+          [row.id],
+        );
+        await insertDeadLetter(
+          client,
+          row,
+          'reaped: max attempts exhausted',
+          row.last_error ?? 'worker lock expired',
+        );
+        await logTransition(client, row.id, row.status, 'dead_letter', null, 'reaped: max attempts exhausted');
+        deadLetteredJobIds.push(row.id);
+      }
     }
-    return { requeuedJobIds };
+    return { requeuedJobIds, deadLetteredJobIds };
   });
 }

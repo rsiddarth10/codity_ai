@@ -269,6 +269,8 @@ export function buildOpenApiSpec(): Record<string, unknown> {
       '/jobs/{jobId}/logs': { parameters: [idParam('jobId')], get: { tags: ['Jobs'], summary: 'Job logs (paginated)', responses: { '200': { description: 'OK' } } } },
       '/jobs/{jobId}/transitions': { parameters: [idParam('jobId')], get: { tags: ['Jobs'], summary: 'Lifecycle timeline', responses: { '200': { description: 'OK' } } } },
       '/jobs/{jobId}/cancel': { parameters: [idParam('jobId')], post: { tags: ['Jobs'], summary: 'Cancel a queued/scheduled job', responses: { '200': { description: 'Cancelled' }, '409': { description: 'Not cancellable' } } } },
+      '/jobs/{jobId}/retry': { parameters: [idParam('jobId')], post: { tags: ['Jobs'], summary: 'Retry a failed or dead-lettered job (DLQ retry resets attempts)', responses: { '200': { description: 'Requeued' }, '409': { description: 'Not retriable' } } } },
+      '/queues/{queueId}/dead-letter': { parameters: [idParam('queueId'), ...paginationParams], get: { tags: ['Dead Letter Queue'], summary: 'List dead-lettered jobs for a queue', responses: { '200': { description: 'Paginated DLQ entries' } } } },
       '/workers': { get: { tags: ['Workers'], summary: 'List workers + current load', responses: { '200': { description: 'OK' } } } },
     },
   };

@@ -61,8 +61,9 @@ describe('job lifecycle + audit trail', () => {
     await startJob(pool, job.id, worker.id);
 
     const failed = await failJob(pool, job.id, worker.id, new Error('boom'));
-    expect(failed!.status).toBe('failed');
-    expect(failed!.last_error).toBe('boom');
+    expect(failed!.outcome).toBe('retry_scheduled'); // default max_attempts=3, attempt 1
+    expect(failed!.job.status).toBe('failed');
+    expect(failed!.job.last_error).toBe('boom');
 
     const exec = await pool.query(
       `SELECT status, error_message FROM job_executions WHERE job_id=$1 ORDER BY attempt_number DESC LIMIT 1`,

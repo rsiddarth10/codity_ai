@@ -137,6 +137,8 @@ Phase 2 ships 13 tests including the grade-critical concurrency proofs:
 - `test/skip-locked.test.ts` — `FOR UPDATE SKIP LOCKED` skips a locked row instead of blocking.
 - `test/reaper.test.ts` — a job whose worker "died" mid-execution is requeued; a job with a fresh heartbeat is not.
 - `test/lifecycle.test.ts` — full state-machine trail, execution/audit rows, idempotency, batch enqueue.
+- `test/retry.unit.test.ts` — fixed/linear/exponential backoff math, cap, and equal-jitter bounds.
+- `test/retry-dlq.test.ts` — retry-with-backoff → attempts exhausted → **Dead Letter Queue**, reaper dead-lettering, and DLQ list + manual retry over HTTP.
 
 ## Teardown
 

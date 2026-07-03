@@ -10,6 +10,9 @@ import {
   listJobLogs,
   listJobTransitions,
   cancelJob,
+  retryJob,
+  listDeadLetter,
+  countDeadLetter,
 } from '@codity/core';
 import { asyncHandler, paginationQuery, toPagination, paginated } from '../http.js';
 import { validate, body, query, params } from '../validate.js';
@@ -134,6 +137,38 @@ export function jobRoutes(pool: Pool): Router {
       const cancelled = await cancelJob(pool, jobId);
       if (!cancelled) throw conflict('Job cannot be cancelled in its current state');
       res.json(cancelled);
+    }),
+  );
+
+  // Manual retry of a failed (in-backoff) or dead-lettered job.
+  r.post(
+    '/jobs/:jobId/retry',
+    validate({ params: jobIdParam }),
+    asyncHandler(async (req, res) => {
+      const { organizationId } = authOf(req);
+      const { jobId } = params<typeof jobIdParam>(req);
+      await assertJob(pool, jobId, organizationId);
+      const retried = await retryJob(pool, jobId);
+      if (!retried) throw conflict('Job is not in a retriable state (must be failed or dead_letter)');
+      res.json(retried);
+    }),
+  );
+
+  // Dead Letter Queue for a queue.
+  r.get(
+    '/queues/:queueId/dead-letter',
+    validate({ params: queueIdParam, query: paginationQuery }),
+    asyncHandler(async (req, res) => {
+      const { organizationId } = authOf(req);
+      const { queueId } = params<typeof queueIdParam>(req);
+      await assertQueue(pool, queueId, organizationId);
+      const q = query<typeof paginationQuery>(req);
+      const p = toPagination(q);
+      const [items, total] = await Promise.all([
+        listDeadLetter(pool, queueId, p),
+        countDeadLetter(pool, queueId),
+      ]);
+      res.json(paginated(items, total, q));
     }),
   );
 

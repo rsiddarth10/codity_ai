@@ -352,3 +352,72 @@ queue create/pause/resume/stats; job enqueue/get/list-filter-paginate/**idempote
 cancel→then-409; validation→400; OpenAPI + health. Integration tests run against the real
 `codity_test` DB via supertest. Live-verified end-to-end against the running process
 (`/docs` serves Swagger UI, full signup→enqueue→stats flow over HTTP).
+
+---
+
+## 5. Retry policies & Dead Letter Queue (Phase 5)
+
+### 5.1 Backoff calculators ([packages/core/src/retry.ts](packages/core/src/retry.ts))
+
+`computeBackoffMs(config, attempt, rng?)` is a **pure function** (rng injectable for
+deterministic tests):
+
+- `fixed` → `base`; `linear` → `base * attempt`; `exponential` → `base * multiplier^(attempt-1)`.
+- Cap at `max_delay_ms` (if set) — bounds exponential blow-up.
+- **Equal jitter** when enabled: result lands in `[delay/2, delay]`. We chose equal over
+  full jitter because full jitter can return ~0 and let retries hammer the queue; equal
+  jitter still guarantees a minimum backoff while de-synchronizing workers to avoid retry
+  storms.
+
+The policy used is the one **snapshotted onto the job at enqueue** (DESIGN §1.2), so
+editing a queue's policy never changes the backoff of jobs already in flight.
+
+### 5.2 Failure → retry-or-DLQ ([lifecycle.ts](packages/core/src/lifecycle.ts) `failJob`)
+
+On a running job's failure (guarded, atomic, inside one tx):
+
+- **Attempts remaining** (`attempts < max_attempts`): status → `failed` with `run_at` pushed
+  out by the computed backoff. `failed` is an explicit **in-backoff resting state** — the
+  claim query ignores it. A dashboard can therefore distinguish "retrying (in backoff)"
+  from "ready".
+- **Attempts exhausted**: status → `dead_letter` **and** a `dead_letter_queue` row is
+  inserted (snapshotting payload/error/attempts), all in the same transaction.
+
+A separate **promoter** (`promoteRetriableJobs`, run by the scheduler) flips
+`failed`+`run_at<=now()` → `queued` when the backoff elapses — symmetric with the
+`scheduled`→`queued` promotion coming in Phase 6, and it keeps the claim query to a single
+ready state.
+
+### 5.3 Reaper now respects max attempts
+
+`requeueExpiredJobs` branches: a crashed job with attempts remaining is requeued
+**immediately** (`run_at=now`, no backoff — a worker crash is an infra fault, not the job's),
+but one that has **exhausted** attempts is **dead-lettered**. This stops a "poison" job that
+repeatedly crashes workers from looping forever (bounded by `max_attempts`).
+
+### 5.4 Manual retry ([queries.ts](packages/core/src/queries.ts) `retryJob`)
+
+- `dead_letter` → `queued` with `attempts` **reset to 0** (fresh budget) and the DLQ row
+  removed.
+- `failed` (in backoff) → `queued` now (skip remaining backoff).
+- anything else → not retriable (API returns 409).
+
+**Idempotency semantics (documented):** "idempotent" in this system means *at-most-once
+enqueue per idempotency key* (the `(queue_id, idempotency_key)` unique index). It does **not**
+make execution exactly-once — a job can run more than once (a retry, or a reaped job whose
+side effects partially applied before the worker crashed). Handlers that mutate external
+state should therefore be written to tolerate re-execution (use the job id / payload key as
+their own dedupe key). This is the standard at-least-once delivery contract.
+
+### 5.5 API
+
+`POST /jobs/:id/retry` (failed or dead-lettered → 200; else 409) and
+`GET /queues/:id/dead-letter` (paginated).
+
+### 5.6 What Phase 5 tested & proved (9 tests)
+
+Unit (6): fixed/linear/exponential values, cap, equal-jitter bounds `[delay/2, delay]`,
+attempt clamp. Integration (3): full **retry-with-backoff → 3 attempts → DLQ** flow (3 failed
+execution rows, DLQ snapshot, manual revive resets attempts); **reaper dead-letters** a
+crashed job that exhausted attempts; **DLQ list + retry over HTTP** (200 → queued → DLQ
+emptied → second retry 409). Total suite: **45 tests**.

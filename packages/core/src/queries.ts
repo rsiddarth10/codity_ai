@@ -1,4 +1,5 @@
-import type { Queryable } from './tx.js';
+import type { Pool } from '@codity/db';
+import { withTransaction, logTransition, type Queryable } from './tx.js';
 import type {
   ProjectRow,
   QueueRow,
@@ -265,4 +266,73 @@ export async function listWorkers(db: Queryable): Promise<(WorkerRow & { running
       ORDER BY w.last_heartbeat DESC`,
   );
   return rows;
+}
+
+// ── Dead Letter Queue ──────────────────────────────────────────────────────────
+
+export interface DeadLetterRow {
+  id: string;
+  job_id: string;
+  queue_id: string;
+  reason: string;
+  attempts_made: number;
+  last_error: string | null;
+  payload: Record<string, unknown>;
+  moved_at: Date;
+}
+
+export async function listDeadLetter(db: Queryable, queueId: string, page: Page): Promise<DeadLetterRow[]> {
+  const { rows } = await db.query<DeadLetterRow>(
+    `SELECT * FROM dead_letter_queue WHERE queue_id = $1
+      ORDER BY moved_at DESC LIMIT $2 OFFSET $3`,
+    [queueId, page.limit, page.offset],
+  );
+  return rows;
+}
+
+export async function countDeadLetter(db: Queryable, queueId: string): Promise<number> {
+  const { rows } = await db.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM dead_letter_queue WHERE queue_id = $1`,
+    [queueId],
+  );
+  return rows[0]!.n;
+}
+
+/**
+ * Manually retry a job:
+ *   - dead_letter -> queued, attempts RESET to 0 (fresh retry budget), DLQ row removed.
+ *   - failed (in backoff) -> queued now (skip the remaining backoff).
+ * Returns null if the job isn't in a retriable state.
+ */
+export async function retryJob(pool: Pool, jobId: string): Promise<JobRow | null> {
+  return withTransaction(pool, async (client) => {
+    const current = await client.query<JobRow>(`SELECT * FROM jobs WHERE id = $1 FOR UPDATE`, [jobId]);
+    const job = current.rows[0];
+    if (!job) return null;
+
+    if (job.status === 'dead_letter') {
+      await client.query(`DELETE FROM dead_letter_queue WHERE job_id = $1`, [jobId]);
+      const updated = await client.query<JobRow>(
+        `UPDATE jobs
+            SET status = 'queued', attempts = 0, last_error = NULL, run_at = now(),
+                claimed_by = NULL, claimed_at = NULL, started_at = NULL, lock_expires_at = NULL,
+                updated_at = now()
+          WHERE id = $1 RETURNING *`,
+        [jobId],
+      );
+      await logTransition(client, jobId, 'dead_letter', 'queued', null, 'manual retry from DLQ (attempts reset)');
+      return updated.rows[0]!;
+    }
+
+    if (job.status === 'failed') {
+      const updated = await client.query<JobRow>(
+        `UPDATE jobs SET status = 'queued', run_at = now(), updated_at = now() WHERE id = $1 RETURNING *`,
+        [jobId],
+      );
+      await logTransition(client, jobId, 'failed', 'queued', null, 'manual retry (backoff skipped)');
+      return updated.rows[0]!;
+    }
+
+    return null; // not retriable from its current state
+  });
 }

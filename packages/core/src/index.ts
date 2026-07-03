@@ -6,3 +6,4 @@ export * from './claim.js';
 export * from './lifecycle.js';
 export * from './logs.js';
 export * from './queries.js';
+export * from './retry.js';
