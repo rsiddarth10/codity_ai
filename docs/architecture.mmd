@@ -1,0 +1,33 @@
+%%{init: {'theme':'neutral', 'flowchart': {'curve':'basis'}}}%%
+flowchart LR
+  subgraph Client
+    UI["React Dashboard<br/>(Vite • Recharts)<br/>polls every ~3s"]
+  end
+
+  subgraph API["API service — Express (stateless, scalable)"]
+    REST["REST /api/v1<br/>auth • projects • queues • jobs<br/>schedules • batches • DLQ • stats"]
+  end
+
+  subgraph Workers["Worker pool — N replicas (independently scalable)"]
+    W1["Worker 1<br/>poll+jitter • claim<br/>execute (semaphore)<br/>heartbeat • graceful drain"]
+    W2["Worker 2"]
+    W3["Worker N"]
+  end
+
+  subgraph Scheduler["Scheduler — singleton sweep loop"]
+    S1["reaper: requeue / DLQ expired locks<br/>promote retries + delayed jobs<br/>fire cron schedules<br/>resolve job dependencies"]
+  end
+
+  PG[("PostgreSQL<br/>system of record AND queue<br/>jobs • executions • logs • transitions<br/>schedules • DLQ • workers • dependencies")]
+
+  UI -->|"HTTPS JSON + JWT"| REST
+  REST -->|"enqueue / read (tenant-scoped)"| PG
+  W1 -->|"SELECT … FOR UPDATE SKIP LOCKED"| PG
+  W2 --> PG
+  W3 --> PG
+  W1 -.->|"heartbeat • results • logs"| PG
+  S1 -->|"lock_expires_at &lt; now() → requeue/DLQ"| PG
+  S1 -->|"scheduled_jobs → new job instances"| PG
+
+  classDef store fill:#e8eef7,stroke:#5b6b8c,stroke-width:2px;
+  class PG store;

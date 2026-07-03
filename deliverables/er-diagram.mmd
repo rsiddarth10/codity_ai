@@ -1,0 +1,166 @@
+%%{init: {'theme':'neutral'}}%%
+erDiagram
+    organizations ||--o{ users : "has"
+    organizations ||--o{ projects : "owns"
+    users ||--o{ refresh_tokens : "issues"
+
+    projects ||--o{ queues : "owns"
+    projects ||--o{ retry_policies : "defines"
+    projects ||--o{ job_batches : "groups"
+
+    retry_policies |o--o{ queues : "default for"
+    retry_policies |o--o{ scheduled_jobs : "default for"
+    retry_policies |o--o{ jobs : "provenance"
+
+    queues ||--o{ jobs : "contains"
+    queues ||--o{ scheduled_jobs : "schedules into"
+    queues ||--o{ dead_letter_queue : "dead-letters into"
+
+    job_batches |o--o{ jobs : "batches"
+    scheduled_jobs |o--o{ jobs : "generates"
+
+    jobs ||--o{ job_executions : "attempted by"
+    jobs ||--o{ job_logs : "emits"
+    jobs ||--o{ job_state_transitions : "audited by"
+    jobs ||--o| dead_letter_queue : "may die into"
+    jobs ||--o{ job_dependencies : "depends (child)"
+    jobs ||--o{ job_dependencies : "blocks (parent)"
+
+    workers ||--o{ worker_heartbeats : "beats"
+    workers |o--o{ jobs : "claims"
+    workers |o--o{ job_executions : "runs"
+
+    organizations {
+        uuid id PK
+        text name
+    }
+    users {
+        uuid id PK
+        uuid organization_id FK
+        citext email UK
+        text password_hash
+        text role "owner|admin|member"
+    }
+    refresh_tokens {
+        uuid id PK
+        uuid user_id FK
+        text token_hash UK "sha-256 of opaque token"
+        timestamptz expires_at
+        timestamptz revoked_at
+    }
+    projects {
+        uuid id PK
+        uuid organization_id FK
+        text name "unique per org"
+    }
+    retry_policies {
+        uuid id PK
+        uuid project_id FK
+        text strategy "fixed|linear|exponential"
+        int max_attempts
+        int base_delay_ms
+        int max_delay_ms
+        numeric backoff_multiplier
+        bool jitter
+    }
+    queues {
+        uuid id PK
+        uuid project_id FK
+        text name "unique per project"
+        int priority
+        int concurrency_limit "running cap across all workers"
+        int rate_limit_per_sec "nullable = unlimited"
+        uuid retry_policy_id FK
+        bool is_paused
+    }
+    workers {
+        uuid id PK
+        text name
+        text status "active|draining|dead"
+        int concurrency
+        jsonb metadata
+        timestamptz last_heartbeat "denormalized latest"
+    }
+    worker_heartbeats {
+        bigint id PK
+        uuid worker_id FK
+        int running_jobs
+        timestamptz heartbeat_at
+    }
+    job_batches {
+        uuid id PK
+        uuid project_id FK
+        text name
+        int total_jobs
+    }
+    scheduled_jobs {
+        uuid id PK
+        uuid queue_id FK
+        text cron_expression
+        text timezone
+        jsonb payload
+        uuid retry_policy_id FK
+        bool is_active
+        timestamptz next_run_at
+        timestamptz last_run_at
+    }
+    jobs {
+        uuid id PK
+        uuid queue_id FK
+        uuid batch_id FK "nullable"
+        uuid scheduled_job_id FK "nullable"
+        text status "scheduled|queued|blocked|claimed|running|completed|failed|dead_letter|cancelled"
+        int priority
+        jsonb payload
+        text idempotency_key "unique per queue"
+        int attempts
+        int max_attempts "snapshot"
+        jsonb retry_config "snapshot of policy"
+        uuid retry_policy_id FK
+        timestamptz run_at "eligibility gate"
+        uuid claimed_by FK "worker"
+        timestamptz lock_expires_at "visibility timeout"
+        text last_error
+        jsonb result
+    }
+    job_dependencies {
+        uuid job_id FK "dependent (child)"
+        uuid depends_on_job_id FK "parent"
+        timestamptz created_at
+    }
+    job_executions {
+        uuid id PK
+        uuid job_id FK
+        int attempt_number "unique per job"
+        uuid worker_id FK
+        text status "running|succeeded|failed"
+        int duration_ms
+        text error_message
+        text error_stack
+    }
+    job_logs {
+        bigint id PK
+        uuid job_id FK
+        uuid execution_id FK "nullable"
+        text level "debug|info|warn|error"
+        text message
+        jsonb metadata
+    }
+    job_state_transitions {
+        bigint id PK
+        uuid job_id FK
+        text from_status
+        text to_status
+        uuid worker_id FK
+        text reason
+    }
+    dead_letter_queue {
+        uuid id PK
+        uuid job_id FK "unique"
+        uuid queue_id FK
+        text reason
+        int attempts_made
+        text last_error
+        jsonb payload "snapshot"
+        timestamptz moved_at
+    }

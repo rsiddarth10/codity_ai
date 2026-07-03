@@ -6,9 +6,21 @@ of horizontally-scalable workers using `SELECT ... FOR UPDATE SKIP LOCKED`, retr
 configurable backoff, dead-lettered on exhaustion, and fully observable (per-attempt
 history, logs, lifecycle audit).
 
-> **Status:** built in phases. Phase 1 (database schema + migrations) is complete. See
-> [DESIGN.md](./DESIGN.md) for decisions, [docs/architecture.md](./docs/architecture.md)
-> for the system diagram, and [docs/er-diagram.md](./docs/er-diagram.md) for the schema.
+> **Status:** complete — 8 phases, one commit each. **63 automated tests** (real dockerized
+> Postgres). Full stack runs with `docker compose up -d --build`.
+>
+> **Key docs:** [DESIGN.md](./DESIGN.md) (decisions & trade-offs) ·
+> [deliverables/](./deliverables/DELIVERABLES.md) (diagrams, OpenAPI, index) ·
+> API reference at `GET /docs` (Swagger UI).
+
+## Architecture & schema
+
+![Architecture](./deliverables/architecture.png)
+
+Three independently scalable services over one Postgres (system of record **and** queue).
+Full-resolution + ER diagram: [docs/architecture.md](./docs/architecture.md) ·
+[docs/er-diagram.md](./docs/er-diagram.md) · downloadable SVG/PNG in
+[deliverables/](./deliverables).
 
 ## Repository layout
 
