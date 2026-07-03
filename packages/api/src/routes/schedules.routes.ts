@@ -12,9 +12,11 @@ import {
 } from '@codity/core';
 import { asyncHandler } from '../http.js';
 import { validate, body, params } from '../validate.js';
-import { authOf } from '../middleware/auth.js';
+import { authOf, requireRole } from '../middleware/auth.js';
 import { badRequest, notFound } from '../errors.js';
 import { assertQueue } from '../scoping.js';
+
+const adminOnly = requireRole('owner', 'admin');
 
 const queueIdParam = z.object({ queueId: z.string().uuid() });
 const scheduleIdParam = z.object({ scheduleId: z.string().uuid() });
@@ -44,6 +46,7 @@ export function scheduleRoutes(pool: Pool): Router {
 
   r.post(
     '/queues/:queueId/schedules',
+    adminOnly,
     validate({ params: queueIdParam, body: createBody }),
     asyncHandler(async (req, res) => {
       const { organizationId } = authOf(req);
@@ -90,6 +93,7 @@ export function scheduleRoutes(pool: Pool): Router {
 
   r.patch(
     '/schedules/:scheduleId',
+    adminOnly,
     validate({ params: scheduleIdParam, body: patchBody }),
     asyncHandler(async (req, res) => {
       const { organizationId } = authOf(req);
@@ -106,6 +110,7 @@ export function scheduleRoutes(pool: Pool): Router {
 
   r.delete(
     '/schedules/:scheduleId',
+    adminOnly,
     validate({ params: scheduleIdParam }),
     asyncHandler(async (req, res) => {
       const { organizationId } = authOf(req);

@@ -22,6 +22,8 @@ export interface EnqueueJobInput {
   /** Explicit snapshot override (skips policy resolution) — used by internal callers. */
   maxAttempts?: number;
   retryConfig?: RetryConfig;
+  /** Job ids this job must wait for. Unfinished parents => job enqueued as 'blocked'. */
+  dependsOn?: string[];
 }
 
 export interface EnqueueResult {
@@ -77,7 +79,19 @@ export async function enqueueJobOnClient(
   input: EnqueueJobInput,
 ): Promise<EnqueueResult> {
   const runAt = input.runAt ?? new Date();
-  const status: JobStatus = runAt.getTime() > Date.now() ? 'scheduled' : 'queued';
+  const deps = input.dependsOn ?? [];
+
+  // A job with any not-yet-completed parent starts 'blocked' (the scheduler promotes it
+  // to 'queued' when all parents complete). Otherwise: future run_at => 'scheduled'.
+  let hasUnmetDeps = false;
+  if (deps.length > 0) {
+    const completed = await client.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM jobs WHERE id = ANY($1::uuid[]) AND status = 'completed'`,
+      [deps],
+    );
+    hasUnmetDeps = completed.rows[0]!.n < deps.length;
+  }
+  const status: JobStatus = hasUnmetDeps ? 'blocked' : runAt.getTime() > Date.now() ? 'scheduled' : 'queued';
 
   const effective: EffectivePolicy =
     input.maxAttempts !== undefined && input.retryConfig !== undefined
@@ -109,7 +123,15 @@ export async function enqueueJobOnClient(
 
   if (inserted.rows[0]) {
     const job = inserted.rows[0];
-    await logTransition(client, job.id, null, status, null, 'enqueued');
+    // Record dependency edges (FK guarantees parents exist -> DAG by construction).
+    for (const parentId of deps) {
+      await client.query(
+        `INSERT INTO job_dependencies (job_id, depends_on_job_id) VALUES ($1, $2)
+         ON CONFLICT DO NOTHING`,
+        [job.id, parentId],
+      );
+    }
+    await logTransition(client, job.id, null, status, null, deps.length > 0 ? `enqueued (${deps.length} dependencies)` : 'enqueued');
     return { job, created: true };
   }
 

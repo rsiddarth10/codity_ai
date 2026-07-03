@@ -34,7 +34,7 @@ import type { JobRow } from './types.js';
  */
 export const CLAIM_JOBS_SQL = `
 WITH cfg AS (
-  SELECT concurrency_limit, is_paused
+  SELECT concurrency_limit, is_paused, rate_limit_per_sec
   FROM queues
   WHERE id = $1
 ),
@@ -44,14 +44,27 @@ inflight AS (
   WHERE queue_id = $1
     AND status IN ('claimed', 'running')
 ),
+-- Jobs claimed within the last rolling second (for rate limiting). Exact because claims
+-- for a queue are serialized by the advisory lock in claimJobs().
+recent AS (
+  SELECT count(*)::int AS n
+  FROM jobs
+  WHERE queue_id = $1
+    AND claimed_at > now() - interval '1 second'
+),
 capacity AS (
   SELECT CASE
            WHEN NOT EXISTS (SELECT 1 FROM cfg)          THEN 0
            WHEN (SELECT is_paused FROM cfg)             THEN 0
-           ELSE GREATEST(0, LEAST(
+           ELSE LEAST(
                   $2::int,
-                  (SELECT concurrency_limit FROM cfg) - (SELECT n FROM inflight)
-                ))
+                  -- concurrency headroom
+                  GREATEST(0, (SELECT concurrency_limit FROM cfg) - (SELECT n FROM inflight)),
+                  -- rate-limit headroom (NULL => unlimited)
+                  CASE WHEN (SELECT rate_limit_per_sec FROM cfg) IS NULL THEN $2::int
+                       ELSE GREATEST(0, (SELECT rate_limit_per_sec FROM cfg) - (SELECT n FROM recent))
+                  END
+                )
          END AS lim
 ),
 claimable AS (

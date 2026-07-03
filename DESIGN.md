@@ -498,3 +498,51 @@ the source of truth and queries re-poll.
 serves (200, correct title), and every endpoint the UI calls is covered by the API
 integration tests. The new throughput SQL has its own integration test (**54 tests total**).
 Deep visual/interaction QA in a real browser is the one thing not automated here.
+
+---
+
+## 8. Bonus features (Phase 8)
+
+Three backend bonuses that reinforce the heavily-weighted areas (architecture / DB /
+reliability), chosen over flashier options (WebSockets, sharding, distributed locking —
+the last already covered by our advisory locks + SKIP LOCKED).
+
+### 8.1 Workflow dependencies (job B waits on A)
+
+- New table `job_dependencies` (edge list, dependent → parent) + a new job status
+  **`blocked`**. A job with any unfinished parent is enqueued `blocked` and is therefore
+  **invisible to the claim query** — which keeps the crown-jewel claim path and its partial
+  index *unchanged* (no correlated NOT-EXISTS bolted onto the hot query).
+- The scheduler's `resolveJobDependencies` sweep promotes `blocked → queued` once **all**
+  parents are `completed`, and **cancels** the job if any parent `dead_letter`/`cancelled`
+  (the dependency can never be satisfied — no silent zombie).
+- **Cycles are impossible by construction**: a job may only depend on jobs that already
+  exist at enqueue, so an older job can never point at a newer one → always a DAG. (Plus a
+  `job_id <> depends_on_job_id` check.) This is cheaper and more robust than runtime cycle
+  detection.
+
+### 8.2 RBAC
+
+`role` (owner/admin/member) already existed on users. A `requireRole(...)` middleware guards
+**config mutations** (projects, queues, retry policies, schedules, user invites → owner/admin)
+while leaving **job operations** (enqueue / retry / cancel / read) open to members. A
+`POST /users` invite endpoint creates teammates **in the caller's own org** (org id taken
+from the token, never the body) with role `admin`/`member` — you can't mint another owner or
+inject a user into another tenant.
+
+### 8.3 Per-queue rate limiting
+
+`queues.rate_limit_per_sec` (nullable). Enforced **inside the claim query's capacity CTE**,
+under the same per-queue advisory lock that already makes concurrency exact: a `recent` CTE
+counts jobs `claimed_at` within the last rolling second, and capacity becomes
+`LEAST(batch, concurrency_headroom, rate_headroom)`. Because claims for a queue are
+serialized, the count is exact and the limit can't be exceeded. NULL = unlimited (zero
+overhead — the CASE short-circuits to the batch size).
+
+### 8.4 What Phase 8 tested & proved (+9 → **63 tests**)
+
+Dependencies (5): blocked-not-claimable, promote-on-parent-complete, **cancel-on-parent-DLQ**,
+wait-for-ALL-parents, already-completed-parent-not-blocked. Rate limiting (2): ≤N claims/sec
+then 0 in-window then more after the window; null = unlimited. RBAC (2): member reads +
+operates jobs but is **403** on config + invites; can't mint an owner (400). Migrations
+0009/0010 verified reversible (`down 2` → `up`).

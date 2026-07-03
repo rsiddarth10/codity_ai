@@ -131,6 +131,7 @@ export interface UpdateQueuePatch {
   concurrencyLimit?: number;
   retryPolicyId?: string | null;
   isPaused?: boolean;
+  rateLimitPerSec?: number | null;
 }
 
 /** Partial update of a queue's config (only provided fields change). */
@@ -141,7 +142,8 @@ export async function updateQueue(db: Queryable, queueId: string, patch: UpdateQ
         priority = COALESCE($3, priority),
         concurrency_limit = COALESCE($4, concurrency_limit),
         retry_policy_id = CASE WHEN $5::boolean THEN $6 ELSE retry_policy_id END,
-        is_paused = COALESCE($7, is_paused)
+        is_paused = COALESCE($7, is_paused),
+        rate_limit_per_sec = CASE WHEN $8::boolean THEN $9 ELSE rate_limit_per_sec END
       WHERE id = $1
       RETURNING *`,
     [
@@ -152,6 +154,8 @@ export async function updateQueue(db: Queryable, queueId: string, patch: UpdateQ
       patch.retryPolicyId !== undefined, // whether to touch retry_policy_id
       patch.retryPolicyId ?? null,
       patch.isPaused ?? null,
+      patch.rateLimitPerSec !== undefined, // whether to touch rate_limit_per_sec
+      patch.rateLimitPerSec ?? null,
     ],
   );
   return rows[0] ?? null;
@@ -173,6 +177,7 @@ export async function getQueueStats(db: Queryable, queueId: string): Promise<Que
         count(*) FILTER (WHERE status='failed')::int      AS failed,
         count(*) FILTER (WHERE status='dead_letter')::int AS dead_letter,
         count(*) FILTER (WHERE status='cancelled')::int   AS cancelled,
+        count(*) FILTER (WHERE status='blocked')::int     AS blocked,
         count(*)::int AS total
        FROM jobs WHERE queue_id = $1`,
     [queueId],
@@ -284,12 +289,12 @@ export async function listJobTransitions(db: Queryable, jobId: string): Promise<
   return rows as never;
 }
 
-/** Cancel a job that hasn't started yet (queued/scheduled -> cancelled). */
+/** Cancel a job that hasn't started yet (queued/scheduled/blocked -> cancelled). */
 export async function cancelJob(db: Queryable, jobId: string): Promise<JobRow | null> {
   const { rows } = await db.query<JobRow>(
     `UPDATE jobs
         SET status = 'cancelled', updated_at = now()
-      WHERE id = $1 AND status IN ('queued', 'scheduled')
+      WHERE id = $1 AND status IN ('queued', 'scheduled', 'blocked')
       RETURNING *`,
     [jobId],
   );

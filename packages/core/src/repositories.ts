@@ -68,6 +68,7 @@ export interface CreateQueueInput {
   concurrencyLimit?: number;
   retryPolicyId?: string | null;
   isPaused?: boolean;
+  rateLimitPerSec?: number | null;
 }
 
 export async function createQueue(
@@ -76,8 +77,8 @@ export async function createQueue(
   input: CreateQueueInput,
 ): Promise<QueueRow> {
   const { rows } = await db.query<QueueRow>(
-    `INSERT INTO queues (project_id, name, priority, concurrency_limit, retry_policy_id, is_paused)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO queues (project_id, name, priority, concurrency_limit, retry_policy_id, is_paused, rate_limit_per_sec)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
     [
       projectId,
@@ -86,6 +87,7 @@ export async function createQueue(
       input.concurrencyLimit ?? 10,
       input.retryPolicyId ?? null,
       input.isPaused ?? false,
+      input.rateLimitPerSec ?? null,
     ],
   );
   return rows[0]!;

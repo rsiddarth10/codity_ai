@@ -13,6 +13,7 @@ import {
   retryJob,
   listDeadLetter,
   countDeadLetter,
+  listJobDependencies,
 } from '@codity/core';
 import { asyncHandler, paginationQuery, toPagination, paginated } from '../http.js';
 import { validate, body, query, params } from '../validate.js';
@@ -39,6 +40,7 @@ const createBody = z.object({
   priority: z.number().int().optional(),
   idempotencyKey: z.string().min(1).max(255).nullish(),
   runAt: z.string().datetime().optional(),
+  dependsOn: z.array(z.string().uuid()).max(100).optional(),
 });
 const listQuery = paginationQuery.extend({ status: z.enum(JOB_STATUSES).optional() });
 
@@ -59,6 +61,7 @@ export function jobRoutes(pool: Pool): Router {
         priority: b.priority,
         idempotencyKey: b.idempotencyKey ?? null,
         runAt: b.runAt ? new Date(b.runAt) : undefined,
+        dependsOn: b.dependsOn,
       });
       // 201 when a job was created; 200 when an idempotency key returned the existing one.
       res.status(created ? 201 : 200).json({ job, idempotent: !created });
@@ -124,6 +127,17 @@ export function jobRoutes(pool: Pool): Router {
       const { jobId } = params<typeof jobIdParam>(req);
       await assertJob(pool, jobId, organizationId);
       res.json({ data: await listJobTransitions(pool, jobId) });
+    }),
+  );
+
+  r.get(
+    '/jobs/:jobId/dependencies',
+    validate({ params: jobIdParam }),
+    asyncHandler(async (req, res) => {
+      const { organizationId } = authOf(req);
+      const { jobId } = params<typeof jobIdParam>(req);
+      await assertJob(pool, jobId, organizationId);
+      res.json({ data: await listJobDependencies(pool, jobId) });
     }),
   );
 

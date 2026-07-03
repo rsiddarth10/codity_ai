@@ -41,6 +41,31 @@ export async function getUserById(pool: Pool, id: string): Promise<UserRow | nul
   return rows[0] ?? null;
 }
 
+/** Create a teammate in an existing organization with a given role (RBAC invite). */
+export async function createOrgUser(
+  pool: Pool,
+  organizationId: string,
+  email: string,
+  passwordHash: string,
+  role: 'admin' | 'member',
+): Promise<UserRow> {
+  const { rows } = await pool.query<UserRow>(
+    `INSERT INTO users (organization_id, email, password_hash, role)
+     VALUES ($1, $2, $3, $4) RETURNING *`,
+    [organizationId, email, passwordHash, role],
+  );
+  return rows[0]!;
+}
+
+export async function listOrgUsers(pool: Pool, organizationId: string): Promise<Omit<UserRow, 'password_hash'>[]> {
+  const { rows } = await pool.query<Omit<UserRow, 'password_hash'>>(
+    `SELECT id, organization_id, email, role, created_at, updated_at
+       FROM users WHERE organization_id = $1 ORDER BY created_at ASC`,
+    [organizationId],
+  );
+  return rows;
+}
+
 export async function insertRefreshToken(
   pool: Pool,
   userId: string,

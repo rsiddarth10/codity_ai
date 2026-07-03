@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
-import { unauthorized } from '../errors.js';
+import { unauthorized, forbidden } from '../errors.js';
 import { verifyAccessToken } from '../auth/jwt.js';
 
 /**
@@ -30,3 +30,19 @@ export function authOf(req: Request): { userId: string; organizationId: string; 
   if (!req.auth) throw unauthorized();
   return req.auth;
 }
+
+/**
+ * RBAC guard: allow only the given roles. Members can operate on jobs (enqueue / retry /
+ * cancel / read); configuration mutations (projects, queues, retry policies, schedules,
+ * inviting users) require owner/admin. Mount after requireAuth.
+ */
+export function requireRole(...roles: string[]): RequestHandler {
+  return (req: Request, _res: Response, next: NextFunction) => {
+    if (!req.auth) return next(unauthorized());
+    if (!roles.includes(req.auth.role)) {
+      return next(forbidden(`This action requires role: ${roles.join(' or ')}`));
+    }
+    next();
+  };
+}
+

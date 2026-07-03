@@ -215,6 +215,7 @@ export function buildOpenApiSpec(): Record<string, unknown> {
                     priority: { type: 'integer' },
                     concurrencyLimit: { type: 'integer', minimum: 1 },
                     retryPolicyId: { type: 'string', format: 'uuid', nullable: true },
+                    rateLimitPerSec: { type: 'integer', minimum: 1, nullable: true, description: 'Max job claims per second (null = unlimited)' },
                   },
                 },
               },
@@ -253,6 +254,7 @@ export function buildOpenApiSpec(): Record<string, unknown> {
                     priority: { type: 'integer' },
                     idempotencyKey: { type: 'string' },
                     runAt: { type: 'string', format: 'date-time' },
+                    dependsOn: { type: 'array', items: { type: 'string', format: 'uuid' }, description: 'Job ids to wait for; unfinished parents => job enqueued blocked' },
                   },
                 },
               },
@@ -268,6 +270,7 @@ export function buildOpenApiSpec(): Record<string, unknown> {
       '/jobs/{jobId}/executions': { parameters: [idParam('jobId')], get: { tags: ['Jobs'], summary: 'Attempt/retry history', responses: { '200': { description: 'OK' } } } },
       '/jobs/{jobId}/logs': { parameters: [idParam('jobId')], get: { tags: ['Jobs'], summary: 'Job logs (paginated)', responses: { '200': { description: 'OK' } } } },
       '/jobs/{jobId}/transitions': { parameters: [idParam('jobId')], get: { tags: ['Jobs'], summary: 'Lifecycle timeline', responses: { '200': { description: 'OK' } } } },
+      '/jobs/{jobId}/dependencies': { parameters: [idParam('jobId')], get: { tags: ['Jobs'], summary: 'Parent jobs this job depends on (+ their status)', responses: { '200': { description: 'OK' } } } },
       '/jobs/{jobId}/cancel': { parameters: [idParam('jobId')], post: { tags: ['Jobs'], summary: 'Cancel a queued/scheduled job', responses: { '200': { description: 'Cancelled' }, '409': { description: 'Not cancellable' } } } },
       '/jobs/{jobId}/retry': { parameters: [idParam('jobId')], post: { tags: ['Jobs'], summary: 'Retry a failed or dead-lettered job (DLQ retry resets attempts)', responses: { '200': { description: 'Requeued' }, '409': { description: 'Not retriable' } } } },
       '/queues/{queueId}/dead-letter': { parameters: [idParam('queueId'), ...paginationParams], get: { tags: ['Dead Letter Queue'], summary: 'List dead-lettered jobs for a queue', responses: { '200': { description: 'Paginated DLQ entries' } } } },
@@ -333,6 +336,26 @@ export function buildOpenApiSpec(): Record<string, unknown> {
         get: { tags: ['Batches'], summary: 'Batch status rollup (counts by status, done/pending)', responses: { '200': { description: 'OK' }, '404': { $ref: '#/components/responses/NotFound' } } },
       },
       '/workers': { get: { tags: ['Workers'], summary: 'List workers + current load', responses: { '200': { description: 'OK' } } } },
+      '/users': {
+        get: { tags: ['Users (RBAC)'], summary: 'List org users (owner/admin only)', responses: { '200': { description: 'OK' }, '403': { description: 'Requires owner/admin' } } },
+        post: {
+          tags: ['Users (RBAC)'],
+          summary: 'Invite a teammate with a role (owner/admin only)',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['email', 'password', 'role'],
+                  properties: { email: { type: 'string', format: 'email' }, password: { type: 'string', minLength: 8 }, role: { type: 'string', enum: ['admin', 'member'] } },
+                },
+              },
+            },
+          },
+          responses: { '201': { description: 'Created' }, '403': { description: 'Requires owner/admin' } },
+        },
+      },
     },
   };
 }

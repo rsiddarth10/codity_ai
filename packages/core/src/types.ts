@@ -8,7 +8,8 @@ export type JobStatus =
   | 'completed'
   | 'failed'
   | 'dead_letter'
-  | 'cancelled';
+  | 'cancelled'
+  | 'blocked';
 
 export type RetryStrategy = 'fixed' | 'linear' | 'exponential';
 
@@ -66,6 +67,7 @@ export interface QueueRow {
   concurrency_limit: number;
   retry_policy_id: string | null;
   is_paused: boolean;
+  rate_limit_per_sec: number | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -135,6 +137,7 @@ export interface QueueStats {
   failed: number;
   dead_letter: number;
   cancelled: number;
+  blocked: number;
   total: number;
   avg_duration_ms: number;
   succeeded_executions: number;

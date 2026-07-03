@@ -13,9 +13,11 @@ import {
 } from '@codity/core';
 import { asyncHandler } from '../http.js';
 import { validate, body, params } from '../validate.js';
-import { authOf } from '../middleware/auth.js';
+import { authOf, requireRole } from '../middleware/auth.js';
 import { notFound } from '../errors.js';
 import { assertProject, assertQueue } from '../scoping.js';
+
+const adminOnly = requireRole('owner', 'admin');
 
 const projectIdParam = z.object({ projectId: z.string().uuid() });
 const queueIdParam = z.object({ queueId: z.string().uuid() });
@@ -24,6 +26,7 @@ const createBody = z.object({
   priority: z.number().int().optional(),
   concurrencyLimit: z.number().int().min(1).optional(),
   retryPolicyId: z.string().uuid().nullish(),
+  rateLimitPerSec: z.number().int().min(1).nullish(),
 });
 const patchBody = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -31,6 +34,7 @@ const patchBody = z.object({
   concurrencyLimit: z.number().int().min(1).optional(),
   retryPolicyId: z.string().uuid().nullish(),
   isPaused: z.boolean().optional(),
+  rateLimitPerSec: z.number().int().min(1).nullish(),
 });
 
 export function queueRoutes(pool: Pool): Router {
@@ -49,6 +53,7 @@ export function queueRoutes(pool: Pool): Router {
 
   r.post(
     '/projects/:projectId/queues',
+    adminOnly,
     validate({ params: projectIdParam, body: createBody }),
     asyncHandler(async (req, res) => {
       const { organizationId } = authOf(req);
@@ -60,6 +65,7 @@ export function queueRoutes(pool: Pool): Router {
         priority: b.priority,
         concurrencyLimit: b.concurrencyLimit,
         retryPolicyId: b.retryPolicyId ?? null,
+        rateLimitPerSec: b.rateLimitPerSec ?? null,
       });
       res.status(201).json(queue);
     }),
@@ -78,6 +84,7 @@ export function queueRoutes(pool: Pool): Router {
 
   r.patch(
     '/queues/:queueId',
+    adminOnly,
     validate({ params: queueIdParam, body: patchBody }),
     asyncHandler(async (req, res) => {
       const { organizationId } = authOf(req);
@@ -97,11 +104,12 @@ export function queueRoutes(pool: Pool): Router {
       res.json(await getQueue(pool, queueId));
     });
 
-  r.post('/queues/:queueId/pause', validate({ params: queueIdParam }), setPaused(true));
-  r.post('/queues/:queueId/resume', validate({ params: queueIdParam }), setPaused(false));
+  r.post('/queues/:queueId/pause', adminOnly, validate({ params: queueIdParam }), setPaused(true));
+  r.post('/queues/:queueId/resume', adminOnly, validate({ params: queueIdParam }), setPaused(false));
 
   r.delete(
     '/queues/:queueId',
+    adminOnly,
     validate({ params: queueIdParam }),
     asyncHandler(async (req, res) => {
       const { organizationId } = authOf(req);

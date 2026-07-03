@@ -215,6 +215,84 @@ export async function promoteDueSchedules(pool: Pool, limit = 100): Promise<stri
   });
 }
 
+// ── Workflow dependencies ────────────────────────────────────────────────────
+
+export interface DependencyResolution {
+  promotedJobIds: string[];
+  cancelledJobIds: string[];
+}
+
+/**
+ * Resolve blocked jobs (run by the scheduler):
+ *   - all parents 'completed'          -> promote to 'queued',
+ *   - any parent 'dead_letter'/'cancelled' -> cancel (the dependency can never be met).
+ * FOR UPDATE ... SKIP LOCKED keeps it safe under concurrency.
+ */
+export async function resolveJobDependencies(pool: Pool, limit = 200): Promise<DependencyResolution> {
+  const promote = await pool.query<{ job_id: string }>(
+    `WITH ready AS (
+        SELECT j.id FROM jobs j
+         WHERE j.status = 'blocked'
+           AND NOT EXISTS (
+             SELECT 1 FROM job_dependencies d JOIN jobs p ON p.id = d.depends_on_job_id
+              WHERE d.job_id = j.id AND p.status <> 'completed'
+           )
+         ORDER BY j.created_at ASC
+         LIMIT $1
+         FOR UPDATE OF j SKIP LOCKED
+     ),
+     promoted AS (
+        UPDATE jobs SET status = 'queued', updated_at = now()
+         WHERE id IN (SELECT id FROM ready) RETURNING id
+     )
+     INSERT INTO job_state_transitions (job_id, from_status, to_status, reason)
+     SELECT id, 'blocked', 'queued', 'all dependencies completed' FROM promoted
+     RETURNING job_id`,
+    [limit],
+  );
+
+  const cancel = await pool.query<{ job_id: string }>(
+    `WITH dead AS (
+        SELECT j.id FROM jobs j
+         WHERE j.status = 'blocked'
+           AND EXISTS (
+             SELECT 1 FROM job_dependencies d JOIN jobs p ON p.id = d.depends_on_job_id
+              WHERE d.job_id = j.id AND p.status IN ('dead_letter', 'cancelled')
+           )
+         LIMIT $1
+         FOR UPDATE OF j SKIP LOCKED
+     ),
+     cancelled AS (
+        UPDATE jobs SET status = 'cancelled', last_error = 'dependency failed', updated_at = now()
+         WHERE id IN (SELECT id FROM dead) RETURNING id
+     )
+     INSERT INTO job_state_transitions (job_id, from_status, to_status, reason)
+     SELECT id, 'blocked', 'cancelled', 'dependency failed (parent dead-lettered or cancelled)' FROM cancelled
+     RETURNING job_id`,
+    [limit],
+  );
+
+  return {
+    promotedJobIds: promote.rows.map((r) => r.job_id),
+    cancelledJobIds: cancel.rows.map((r) => r.job_id),
+  };
+}
+
+/** List a job's dependency parents with their current status (for the API/detail view). */
+export async function listJobDependencies(
+  db: Queryable,
+  jobId: string,
+): Promise<{ depends_on_job_id: string; status: string }[]> {
+  const { rows } = await db.query<{ depends_on_job_id: string; status: string }>(
+    `SELECT d.depends_on_job_id, p.status
+       FROM job_dependencies d JOIN jobs p ON p.id = d.depends_on_job_id
+      WHERE d.job_id = $1
+      ORDER BY d.created_at ASC`,
+    [jobId],
+  );
+  return rows;
+}
+
 // ── Batch rollup ─────────────────────────────────────────────────────────────
 
 export interface BatchStatus {

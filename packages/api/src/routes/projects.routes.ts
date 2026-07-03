@@ -14,10 +14,11 @@ import {
 } from '@codity/core';
 import { asyncHandler, paginationQuery, toPagination, paginated } from '../http.js';
 import { validate, body, query, params } from '../validate.js';
-import { authOf } from '../middleware/auth.js';
+import { authOf, requireRole } from '../middleware/auth.js';
 import { notFound } from '../errors.js';
 import { assertProject } from '../scoping.js';
 
+const adminOnly = requireRole('owner', 'admin');
 const projectIdParam = z.object({ projectId: z.string().uuid() });
 const nameBody = z.object({ name: z.string().min(1).max(200) });
 const retryPolicyBody = z.object({
@@ -51,6 +52,7 @@ export function projectRoutes(pool: Pool): Router {
 
   r.post(
     '/projects',
+    adminOnly,
     validate({ body: nameBody }),
     asyncHandler(async (req, res) => {
       const { organizationId } = authOf(req);
@@ -71,6 +73,7 @@ export function projectRoutes(pool: Pool): Router {
 
   r.patch(
     '/projects/:projectId',
+    adminOnly,
     validate({ params: projectIdParam, body: nameBody }),
     asyncHandler(async (req, res) => {
       const { organizationId } = authOf(req);
@@ -83,6 +86,7 @@ export function projectRoutes(pool: Pool): Router {
 
   r.delete(
     '/projects/:projectId',
+    adminOnly,
     validate({ params: projectIdParam }),
     asyncHandler(async (req, res) => {
       const { organizationId } = authOf(req);
@@ -106,6 +110,7 @@ export function projectRoutes(pool: Pool): Router {
 
   r.post(
     '/projects/:projectId/retry-policies',
+    adminOnly,
     validate({ params: projectIdParam, body: retryPolicyBody }),
     asyncHandler(async (req, res) => {
       const { organizationId } = authOf(req);
@@ -127,6 +132,7 @@ export function projectRoutes(pool: Pool): Router {
 
   r.delete(
     '/projects/:projectId/retry-policies/:policyId',
+    adminOnly,
     validate({ params: policyIdParam }),
     asyncHandler(async (req, res) => {
       const { organizationId } = authOf(req);

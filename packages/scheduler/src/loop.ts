@@ -5,6 +5,7 @@ import {
   promoteRetriableJobs,
   promoteScheduledJobs,
   promoteDueSchedules,
+  resolveJobDependencies,
 } from '@codity/core';
 import type { Logger } from '@codity/shared';
 
@@ -24,7 +25,9 @@ export interface SchedulerLoopConfig {
  *   2. reap expired locks: requeue crashed jobs (or dead-letter if exhausted),
  *   3. promote retriable jobs whose backoff elapsed ('failed' + due -> 'queued'),
  *   4. promote one-shot delayed jobs that are due ('scheduled' + due -> 'queued'),
- *   5. fire due cron schedules (scheduled_jobs -> new job instances).
+ *   5. fire due cron schedules (scheduled_jobs -> new job instances),
+ *   6. resolve workflow dependencies ('blocked' -> 'queued' when parents complete, or
+ *      -> 'cancelled' when a parent dead-letters/cancels).
  *
  * Every step uses FOR UPDATE SKIP LOCKED, so even if two loops briefly overlap during a
  * deploy nothing double-fires or double-recovers.
@@ -69,6 +72,10 @@ export class SchedulerLoop {
 
       const fired = await promoteDueSchedules(this.pool, limit);
       if (fired.length > 0) this.logger.info({ count: fired.length }, 'fired cron schedules');
+
+      const deps = await resolveJobDependencies(this.pool, limit * 2);
+      if (deps.promotedJobIds.length > 0) this.logger.info({ count: deps.promotedJobIds.length }, 'unblocked jobs (dependencies met)');
+      if (deps.cancelledJobIds.length > 0) this.logger.warn({ count: deps.cancelledJobIds.length }, 'cancelled jobs (dependency failed)');
     } catch (err) {
       this.logger.error({ err }, 'scheduler tick failed');
     } finally {

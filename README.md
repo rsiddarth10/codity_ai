@@ -158,6 +158,9 @@ Phase 2 ships 13 tests including the grade-critical concurrency proofs:
 - `test/retry.unit.test.ts` — fixed/linear/exponential backoff math, cap, and equal-jitter bounds.
 - `test/retry-dlq.test.ts` — retry-with-backoff → attempts exhausted → **Dead Letter Queue**, reaper dead-lettering, and DLQ list + manual retry over HTTP.
 - `test/scheduling.test.ts` — cron next-run math, delayed-job promotion, cron firing (+ no double-fire), and batch rollup, plus the schedule/batch API.
+- `test/dependencies.test.ts` — workflow dependencies (blocked → queued on parent completion, cancel on parent failure, wait-for-all).
+- `test/rate-limit.test.ts` — per-queue rate limiting enforced in the claim path.
+- `test/rbac.test.ts` — role-based access control (members can't mutate config; owner/admin invites).
 
 ## Teardown
 
