@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@codity/db": "*",
+    "cron-parser": "^4.9.0",
     "pg": "^8.13.1"
   },
   "devDependencies": {

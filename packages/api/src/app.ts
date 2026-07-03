@@ -15,6 +15,8 @@ import { projectRoutes } from './routes/projects.routes.js';
 import { queueRoutes } from './routes/queues.routes.js';
 import { jobRoutes } from './routes/jobs.routes.js';
 import { workerRoutes } from './routes/workers.routes.js';
+import { scheduleRoutes } from './routes/schedules.routes.js';
+import { batchRoutes } from './routes/batches.routes.js';
 import { buildOpenApiSpec } from './openapi.js';
 
 /**
@@ -70,6 +72,8 @@ export function buildApp(
   api.use(projectRoutes(pool));
   api.use(queueRoutes(pool));
   api.use(jobRoutes(pool));
+  api.use(scheduleRoutes(pool));
+  api.use(batchRoutes(pool));
   api.use(workerRoutes(pool));
 
   app.use('/api/v1', api);

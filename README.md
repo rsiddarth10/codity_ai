@@ -18,7 +18,7 @@ packages/
   shared/      # env config (zod), pino logger, graceful shutdown
   core/        # data-access layer: enqueue, the claim query, lifecycle, reaper
   worker/      # worker engine: poll/claim/execute/heartbeat/graceful shutdown
-  scheduler/   # reaper sweep loop (cron promoter added in Phase 6)
+  scheduler/   # singleton sweep loop: reaper + retry/delayed/cron promotion
   api/         # Express REST API: auth, projects, queues, jobs, OpenAPI
 frontend/      # React dashboard                             (Phase 7)
 docs/          # architecture + ER diagrams
@@ -139,6 +139,7 @@ Phase 2 ships 13 tests including the grade-critical concurrency proofs:
 - `test/lifecycle.test.ts` — full state-machine trail, execution/audit rows, idempotency, batch enqueue.
 - `test/retry.unit.test.ts` — fixed/linear/exponential backoff math, cap, and equal-jitter bounds.
 - `test/retry-dlq.test.ts` — retry-with-backoff → attempts exhausted → **Dead Letter Queue**, reaper dead-lettering, and DLQ list + manual retry over HTTP.
+- `test/scheduling.test.ts` — cron next-run math, delayed-job promotion, cron firing (+ no double-fire), and batch rollup, plus the schedule/batch API.
 
 ## Teardown
 

@@ -7,3 +7,4 @@ export * from './lifecycle.js';
 export * from './logs.js';
 export * from './queries.js';
 export * from './retry.js';
+export * from './scheduling.js';

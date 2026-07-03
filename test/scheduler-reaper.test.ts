@@ -8,13 +8,14 @@ import {
   registerWorker,
   getJob,
   markStaleWorkersDead,
+  createSchedule,
 } from '@codity/core';
-import { Reaper } from '@codity/scheduler';
+import { SchedulerLoop } from '@codity/scheduler';
 import { testPool, resetDb, seedQueue, waitFor } from './helpers.js';
 
 const silentLogger = pino({ level: 'silent' });
 
-describe('scheduler reaper loop', () => {
+describe('scheduler loop', () => {
   const pool: Pool = testPool(10);
   beforeEach(() => resetDb(pool));
   afterAll(() => pool.end());
@@ -29,17 +30,50 @@ describe('scheduler reaper loop', () => {
     // Simulate the crash: lock expired.
     await pool.query(`UPDATE jobs SET lock_expires_at = now() - interval '1 minute' WHERE id=$1`, [job.id]);
 
-    const reaper = new Reaper(pool, { intervalMs: 20, deadAfterMs: 30_000 }, silentLogger);
-    reaper.start();
+    const loop = new SchedulerLoop(pool, { intervalMs: 20, deadAfterMs: 30_000 }, silentLogger);
+    loop.start();
     try {
       await waitFor(async () => (await getJob(pool, job.id))?.status === 'queued');
     } finally {
-      reaper.stop();
+      loop.stop();
     }
 
     const fresh = await getJob(pool, job.id);
     expect(fresh!.status).toBe('queued');
     expect(fresh!.claimed_by).toBeNull();
+  });
+
+  it('the running loop fires a due cron schedule into a real job', async () => {
+    const { queueId } = await seedQueue(pool, { name: 'q', concurrencyLimit: 5 });
+    const schedule = await createSchedule(pool, {
+      queueId,
+      name: 'cron',
+      cronExpression: '* * * * *',
+      payload: { type: 'echo' },
+    });
+    // Force it due so the next tick fires it.
+    await pool.query(`UPDATE scheduled_jobs SET next_run_at = now() - interval '1 second' WHERE id = $1`, [schedule.id]);
+
+    const loop = new SchedulerLoop(pool, { intervalMs: 20, deadAfterMs: 30_000 }, silentLogger);
+    loop.start();
+    try {
+      await waitFor(async () => {
+        const r = await pool.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM jobs WHERE scheduled_job_id = $1`,
+          [schedule.id],
+        );
+        return r.rows[0]!.n >= 1;
+      });
+    } finally {
+      loop.stop();
+    }
+
+    const jobs = await pool.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM jobs WHERE scheduled_job_id = $1`,
+      [schedule.id],
+    );
+    // Exactly one instance (loop must not double-fire after advancing next_run_at).
+    expect(jobs.rows[0]!.n).toBe(1);
   });
 
   it('marks a stale worker dead', async () => {

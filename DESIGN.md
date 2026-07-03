@@ -421,3 +421,50 @@ attempt clamp. Integration (3): full **retry-with-backoff → 3 attempts → DLQ
 execution rows, DLQ snapshot, manual revive resets attempts); **reaper dead-letters** a
 crashed job that exhausted attempts; **DLQ list + retry over HTTP** (200 → queued → DLQ
 emptied → second retry 409). Total suite: **45 tests**.
+
+---
+
+## 6. Scheduling — delayed / cron / batch (Phase 6)
+
+All time-based promotion runs in the single **scheduler loop** ([SchedulerLoop](packages/scheduler/src/loop.ts)),
+which now performs five ordered steps per tick (reap → retry-promote → delayed-promote →
+cron-fire). Cron math is delegated to `cron-parser` (never hand-rolled).
+
+### 6.1 The four job creation modes
+
+| Mode | How it's represented | How it becomes runnable |
+| --- | --- | --- |
+| **Immediate** | `enqueueJob`, `run_at=now` → status `queued` | claimable right away |
+| **Delayed / one-shot scheduled** | `enqueueJob` with future `run_at` → status `scheduled` | `promoteScheduledJobs`: `scheduled`+`run_at<=now()` → `queued` |
+| **Recurring / cron** | a row in `scheduled_jobs` (cron + template payload) | `promoteDueSchedules`: fires due schedules into concrete jobs |
+| **Batch** | `job_batches` row + N jobs sharing `batch_id` | all `queued` immediately; batch status is an aggregate rollup |
+
+### 6.2 Cron firing ([scheduling.ts](packages/core/src/scheduling.ts) `promoteDueSchedules`)
+
+For each active schedule with `next_run_at<=now()` (selected `FOR UPDATE SKIP LOCKED`):
+enqueue a concrete job instance linked via `jobs.scheduled_job_id`, then advance
+`next_run_at` to the next occurrence **after `now()`** — enqueue + advance in one
+transaction. Advancing from `now()` rather than the missed slot means a scheduler that was
+down **fires once and moves on** instead of backfilling a storm of missed runs. `next_run_at`
+and `created_at`-on-create are computed with `cron-parser` honoring the schedule's timezone.
+Idempotent across ticks: once advanced, the schedule isn't due again until its next slot.
+
+### 6.3 Batch rollup ([scheduling.ts](packages/core/src/scheduling.ts) `getBatchStatus`)
+
+`enqueueBatch` inserts a `job_batches` row + N jobs in one transaction. The status rollup is
+computed live via `GROUP BY status` over `batch_id` (never denormalized, so it's always
+correct): counts per status, `terminal` (completed+dead_letter+cancelled), `pending`, and a
+`done` flag when every job has reached a terminal state.
+
+### 6.4 API
+
+`POST/GET /queues/:id/schedules`, `GET/PATCH/DELETE /schedules/:id` (PATCH toggles
+`isActive` to pause/resume or edits the cron, recomputing `next_run_at`; invalid cron → 400).
+`POST /queues/:id/batches` (submit N jobs → `{batchId, count}`), `GET /batches/:id` (rollup).
+
+### 6.5 What Phase 6 tested & proved (+8 → **53 tests**)
+
+Pure cron next-run + validation; delayed one-shot promotion; **cron fire + link +
+next_run_at advance + no double-fire**; the **running SchedulerLoop** firing a due schedule
+into exactly one job; batch rollup (pending → done); and over HTTP: schedule create/list +
+**bad-cron 400**, batch submit + rollup.

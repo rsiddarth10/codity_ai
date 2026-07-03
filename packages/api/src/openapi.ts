@@ -271,6 +271,67 @@ export function buildOpenApiSpec(): Record<string, unknown> {
       '/jobs/{jobId}/cancel': { parameters: [idParam('jobId')], post: { tags: ['Jobs'], summary: 'Cancel a queued/scheduled job', responses: { '200': { description: 'Cancelled' }, '409': { description: 'Not cancellable' } } } },
       '/jobs/{jobId}/retry': { parameters: [idParam('jobId')], post: { tags: ['Jobs'], summary: 'Retry a failed or dead-lettered job (DLQ retry resets attempts)', responses: { '200': { description: 'Requeued' }, '409': { description: 'Not retriable' } } } },
       '/queues/{queueId}/dead-letter': { parameters: [idParam('queueId'), ...paginationParams], get: { tags: ['Dead Letter Queue'], summary: 'List dead-lettered jobs for a queue', responses: { '200': { description: 'Paginated DLQ entries' } } } },
+      '/queues/{queueId}/schedules': {
+        parameters: [idParam('queueId')],
+        get: { tags: ['Schedules'], summary: 'List cron schedules for a queue', responses: { '200': { description: 'OK' } } },
+        post: {
+          tags: ['Schedules'],
+          summary: 'Create a cron schedule (generates job instances on schedule)',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['name', 'cronExpression'],
+                  properties: {
+                    name: { type: 'string' },
+                    cronExpression: { type: 'string', example: '*/5 * * * *' },
+                    timezone: { type: 'string', example: 'UTC' },
+                    payload: { type: 'object' },
+                    priority: { type: 'integer' },
+                    retryPolicyId: { type: 'string', format: 'uuid', nullable: true },
+                  },
+                },
+              },
+            },
+          },
+          responses: { '201': { description: 'Created' }, '400': { description: 'Invalid cron expression' } },
+        },
+      },
+      '/schedules/{scheduleId}': {
+        parameters: [idParam('scheduleId')],
+        get: { tags: ['Schedules'], summary: 'Get a schedule', responses: { '200': { description: 'OK' }, '404': { $ref: '#/components/responses/NotFound' } } },
+        patch: { tags: ['Schedules'], summary: 'Update a schedule (pause via isActive, change cron, etc.)', responses: { '200': { description: 'OK' } } },
+        delete: { tags: ['Schedules'], summary: 'Delete a schedule', responses: { '204': { description: 'Deleted' } } },
+      },
+      '/queues/{queueId}/batches': {
+        parameters: [idParam('queueId')],
+        post: {
+          tags: ['Batches'],
+          summary: 'Submit N jobs as one batch',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['name', 'jobs'],
+                  properties: {
+                    name: { type: 'string' },
+                    jobs: { type: 'array', items: { type: 'object', properties: { payload: { type: 'object' }, priority: { type: 'integer' }, idempotencyKey: { type: 'string' }, runAt: { type: 'string', format: 'date-time' } } } },
+                  },
+                },
+              },
+            },
+          },
+          responses: { '201': { description: 'Created (returns batchId + count)' } },
+        },
+      },
+      '/batches/{batchId}': {
+        parameters: [idParam('batchId')],
+        get: { tags: ['Batches'], summary: 'Batch status rollup (counts by status, done/pending)', responses: { '200': { description: 'OK' }, '404': { $ref: '#/components/responses/NotFound' } } },
+      },
       '/workers': { get: { tags: ['Workers'], summary: 'List workers + current load', responses: { '200': { description: 'OK' } } } },
     },
   };

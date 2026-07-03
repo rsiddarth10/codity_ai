@@ -6,7 +6,7 @@
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./reaper": "./src/reaper.ts"
+    "./loop": "./src/loop.ts"
   },
   "scripts": {
     "start": "tsx src/main.ts",
